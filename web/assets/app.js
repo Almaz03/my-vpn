@@ -30,6 +30,7 @@
   const resultMessage = document.querySelector('#result-message');
   const installHint = document.querySelector('#install-hint');
   const importHint = document.querySelector('#import-hint');
+  const openAmnezia = document.querySelector('#open-amnezia');
   const downloadLink = document.querySelector('#download-link');
   const qrStep = document.querySelector('#qr-step');
   const qrImage = document.querySelector('#qr-image');
@@ -50,6 +51,8 @@
   let nextAttemptAt = 0;
   let requestToken = '';
   let pollTimer = 0;
+  let configFile = null;
+  let configDownloadUrl = '';
 
   selectPlatform(platform);
 
@@ -78,6 +81,20 @@
       showRequestStatus('Связь восстановлена. Проверяем запрос…', 'busy');
       pollAccessRequest();
     }
+  });
+
+  openAmnezia.addEventListener('click', async () => {
+    if (!configDownloadUrl) return;
+    if (configFile && navigator.share && navigator.canShare && navigator.canShare({ files: [configFile] })) {
+      try {
+        await navigator.share({ files: [configFile], title: 'Family VPN' });
+        return;
+      } catch (error) {
+        if (error && error.name === 'AbortError') return;
+      }
+    }
+    downloadLink.click();
+    importHint.textContent = 'Файл скачан. Откройте его и выберите AmneziaVPN в меню «Поделиться».';
   });
 
   showRequestForm.addEventListener('click', () => {
@@ -383,6 +400,8 @@
     const downloadUrl = safeLocalUrl(data.config_download_url);
     const qrUrl = safeImageUrl(data.qr_code_url);
     const profileAvailable = Boolean(downloadUrl || qrUrl);
+    configDownloadUrl = downloadUrl;
+    configFile = null;
 
     resultTitle.textContent = profileAvailable ? 'Профиль устройства готов' : 'Приглашение принято';
     resultMessage.textContent = typeof data.message === 'string' && data.message.length <= 180
@@ -397,6 +416,10 @@
 
     downloadLink.hidden = !downloadUrl;
     if (downloadUrl) downloadLink.href = downloadUrl;
+    openAmnezia.hidden = !downloadUrl;
+    openAmnezia.disabled = false;
+    openAmnezia.textContent = 'Открыть в AmneziaVPN';
+    if (downloadUrl) prepareConfigShare(downloadUrl);
 
     qrStep.hidden = !qrUrl;
     if (qrUrl) qrImage.src = qrUrl;
@@ -404,6 +427,29 @@
     resultPanel.hidden = false;
     resultPanel.focus({ preventScroll: true });
     resultPanel.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+  }
+
+  async function prepareConfigShare(downloadUrl) {
+    if (!navigator.share || !navigator.canShare || typeof File !== 'function') return;
+    openAmnezia.disabled = true;
+    openAmnezia.textContent = 'Подготавливаем профиль…';
+    try {
+      const response = await fetch(downloadUrl, { credentials: 'same-origin', cache: 'no-store' });
+      if (!response.ok) throw new Error('profile unavailable');
+      const body = await response.text();
+      if (body.length < 100 || body.length > 32768 || !body.includes('[Interface]') || !body.includes('[Peer]')) {
+        throw new Error('invalid profile');
+      }
+      const file = new File([body], 'family-vpn.conf', { type: 'text/plain' });
+      if (configDownloadUrl === downloadUrl && navigator.canShare({ files: [file] })) configFile = file;
+    } catch {
+      configFile = null;
+    } finally {
+      if (configDownloadUrl === downloadUrl) {
+        openAmnezia.disabled = false;
+        openAmnezia.textContent = 'Открыть в AmneziaVPN';
+      }
+    }
   }
 
   function safeLocalUrl(value) {
