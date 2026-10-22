@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'status=$?; echo "application canary failed at line $LINENO status=$status" >&2; exit "$status"' ERR
 
 if [[ "$EUID" -ne 0 ]]; then
   echo "application-canary.sh must run as root" >&2
@@ -47,6 +48,7 @@ nonce="$(openssl rand -hex 6)"
 jq -cn --arg name "canary-$nonce" \
   '{relative_name:$name,device_name:"deployment-canary",ttl_seconds:600}' > "$work/invitation-request.json"
 admin_request POST /api/v1/admin/invitations "$work/invitation-request.json" > "$work/invitation.json"
+echo "application canary: invitation created"
 invitation_id="$(jq -r '.invitation.id // empty' "$work/invitation.json")"
 code="$(jq -r '.code // empty' "$work/invitation.json")"
 [[ "$invitation_id" =~ ^[0-9a-f]{32}$ && -n "$code" ]]
@@ -56,6 +58,7 @@ jq -cn --arg code "$code" \
 curl --fail --silent --show-error --request POST \
   --header 'Content-Type: application/json' --data-binary "@$work/activation-request.json" \
   http://127.0.0.1:8080/api/v1/activate > "$work/activation.json"
+echo "application canary: invitation activated"
 device_id="$(jq -r '.device_id // empty' "$work/activation.json")"
 subscription="$(jq -r '.config_download_url // empty' "$work/activation.json")"
 [[ "$device_id" =~ ^[0-9a-f]{32}$ && "$subscription" == https://vpn.akalmaz.tech/s/*'?download=1' ]]

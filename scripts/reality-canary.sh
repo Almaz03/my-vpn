@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'status=$?; echo "reality canary failed at line $LINENO status=$status" >&2; exit "$status"' ERR
 
 if [[ "$EUID" -ne 0 ]]; then
   echo "reality-canary.sh must run as root" >&2
@@ -33,6 +34,7 @@ jq -cn --arg id "$device_id" \
   '{version:1,device_id:$id,relative_name:"canary",device_name:"canary",platform:"linux"}' |
   /usr/local/libexec/my-vpn/reality-helper provision > "$work/provision.json"
 provisioned=true
+echo "reality canary: temporary client provisioned"
 uuid="$(jq -r --arg email "device-$device_id" '
   .inbounds[] | select(.tag == "my-vpn-reality") |
   .settings.clients[] | select(.email == $email) | .id
@@ -89,6 +91,7 @@ done
 [[ "$ready" == true ]]
 curl --fail --silent --show-error --max-time 15 \
   --proxy "socks5h://127.0.0.1:$port" \
-  https://www.cloudflare.com/cdn-cgi/trace > "$work/trace.txt"
+  --output "$work/trace.txt" \
+  https://www.cloudflare.com/cdn-cgi/trace
 grep -Eq '^ip=[0-9a-fA-F:.]+$' "$work/trace.txt"
 echo "VLESS Reality egress canary passed"
