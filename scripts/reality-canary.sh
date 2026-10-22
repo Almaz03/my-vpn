@@ -89,6 +89,6 @@ done
 [[ "$ready" == true ]]
 curl --fail --silent --show-error --max-time 15 \
   --proxy "socks5h://127.0.0.1:$port" \
-  https://www.cloudflare.com/cdn-cgi/trace |
-  grep -Eq '^ip=[0-9a-fA-F:.]+$'
+  https://www.cloudflare.com/cdn-cgi/trace > "$work/trace.txt"
+grep -Eq '^ip=[0-9a-fA-F:.]+$' "$work/trace.txt"
 echo "VLESS Reality egress canary passed"
