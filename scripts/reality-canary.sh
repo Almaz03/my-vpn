@@ -46,6 +46,8 @@ get_env() { sed -n "s/^$1=//p" /etc/my-vpn/xray-client.env; }
 public_key="$(get_env XRAY_PUBLIC_KEY)"
 short_id="$(get_env XRAY_SHORT_ID)"
 sni="$(get_env XRAY_SNI)"
+server_port="$(get_env XRAY_PORT)"
+[[ "$server_port" =~ ^[0-9]{1,5}$ ]] && (( server_port >= 1 && server_port <= 65535 ))
 port=18090
 while ss -H -ltn "sport = :$port" | grep -q .; do
   ((port++))
@@ -53,7 +55,7 @@ while ss -H -ltn "sport = :$port" | grep -q .; do
 done
 
 jq -n --arg id "$uuid" --arg public_key "$public_key" --arg short_id "$short_id" \
-  --arg sni "$sni" --argjson port "$port" '{
+  --arg sni "$sni" --argjson port "$port" --argjson server_port "$server_port" '{
     log: {loglevel:"warning"},
     inbounds:[{
       listen:"127.0.0.1", port:$port, protocol:"socks",
@@ -61,7 +63,7 @@ jq -n --arg id "$uuid" --arg public_key "$public_key" --arg short_id "$short_id"
     }],
     outbounds:[{
       protocol:"vless",
-      settings:{vnext:[{address:"127.0.0.1",port:8443,users:[{
+      settings:{vnext:[{address:"127.0.0.1",port:$server_port,users:[{
         id:$id,encryption:"none",flow:"xtls-rprx-vision"
       }]}]},
       streamSettings:{

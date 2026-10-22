@@ -1,3 +1,10 @@
+{
+	# Public TCP/443 is owned by Xray Reality. Ordinary HTTPS handshakes are
+	# forwarded to this internal Caddy listener, while public HTTP/80 remains
+	# available for redirects and ACME challenges.
+	https_port 8444
+}
+
 vpn.akalmaz.tech {
 	encode zstd gzip
 

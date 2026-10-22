@@ -158,7 +158,7 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
     inbounds: [{
       tag: "my-vpn-reality",
       listen: "0.0.0.0",
-      port: 8443,
+      port: 443,
       protocol: "vless",
       settings: {clients: [], decryption: "none"},
       streamSettings: {
@@ -166,7 +166,7 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
         security: "reality",
         realitySettings: {
           show: false,
-          dest: "127.0.0.1:443",
+          dest: "127.0.0.1:8444",
           xver: 0,
           serverNames: ["vpn.akalmaz.tech"],
           privateKey: $private_key,
@@ -194,7 +194,7 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
   chmod 0644 /etc/xray/.managed-by-my-vpn
   {
     printf 'XRAY_SERVER=vpn.akalmaz.tech\n'
-    printf 'XRAY_PORT=8443\n'
+    printf 'XRAY_PORT=443\n'
     printf 'XRAY_PUBLIC_KEY=%s\n' "$public_key"
     printf 'XRAY_SHORT_ID=%s\n' "$short_id"
     printf 'XRAY_SNI=vpn.akalmaz.tech\n'
@@ -203,8 +203,25 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
   } > /etc/my-vpn/xray-client.env
   chown root:"$app_user" /etc/my-vpn/xray-client.env
   chmod 0640 /etc/my-vpn/xray-client.env
+else
+  # Migrate the managed data plane from the frequently filtered high port to
+  # TCP/443 without rotating Reality keys or existing device UUIDs.
+  current_port="$(jq -r '.inbounds[] | select(.tag == "my-vpn-reality") | .port' /etc/xray/config.json)"
+  if [[ "$current_port" == 8443 ]]; then
+    cp -a /etc/xray/config.json "/etc/xray/config.json.pre-443.$(date -u +%Y%m%dT%H%M%SZ)"
+    jq '
+      (.inbounds[] | select(.tag == "my-vpn-reality") | .port) = 443 |
+      (.inbounds[] | select(.tag == "my-vpn-reality") | .streamSettings.realitySettings.dest) = "127.0.0.1:8444"
+    ' /etc/xray/config.json > "$install_tmp/xray-config.json"
+    install -m 0640 -o "$xray_user" -g "$xray_user" \
+      "$install_tmp/xray-config.json" /etc/xray/config.json
+    sed -i 's/^XRAY_PORT=8443$/XRAY_PORT=443/' /etc/my-vpn/xray-client.env
+  fi
 fi
 test -f /etc/my-vpn/xray-client.env
+test "$(jq -r '.inbounds[] | select(.tag == "my-vpn-reality") | .port' /etc/xray/config.json)" = 443
+test "$(jq -r '.inbounds[] | select(.tag == "my-vpn-reality") | .streamSettings.realitySettings.dest' /etc/xray/config.json)" = 127.0.0.1:8444
+grep -Fxq 'XRAY_PORT=443' /etc/my-vpn/xray-client.env
 /usr/local/bin/xray run -test -config /etc/xray/config.json >/dev/null
 echo "bootstrap phase: Xray configured"
 
@@ -234,8 +251,8 @@ fi
 
 ufw allow "$ssh_port/tcp" comment 'SSH managed outside my-vpn'
 ufw allow 80/tcp comment 'my-vpn ACME HTTP challenge and redirect'
-ufw allow 443/tcp comment 'my-vpn HTTPS portal'
-ufw allow 8443/tcp comment 'my-vpn VLESS Reality'
+ufw allow 443/tcp comment 'my-vpn HTTPS and VLESS Reality'
+ufw --force delete allow 8443/tcp >/dev/null 2>&1 || true
 ufw allow 35473/udp comment 'existing AmneziaWG - do not remove'
 if ip link show tailscale0 >/dev/null 2>&1; then
   ufw allow in on tailscale0 comment 'Tailscale management'
@@ -246,12 +263,16 @@ ufw --force enable
 echo "bootstrap phase: firewall enabled"
 
 systemctl daemon-reload
-systemctl enable --now xray.service
-systemctl enable --now caddy.service
+systemctl enable caddy.service xray.service
+# Caddy must release public 443 and start its internal TLS listener before
+# Xray takes ownership of public 443 and forwards ordinary HTTPS to Caddy.
+systemctl restart caddy.service
+systemctl restart xray.service
 systemctl enable --now my-vpn-backup.timer
 systemctl is-active --quiet xray.service
 systemctl is-active --quiet caddy.service
-ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)8443$'
+ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)443$'
+ss -H -ltn | awk '{print $4}' | grep -Eq '127\.0\.0\.1:8444$'
 if [[ "$awg_was_running" == true ]]; then
   [[ "$(docker inspect -f '{{.State.Running}}' amnezia-awg2)" == true ]]
   ss -H -lun | awk '{print $4}' | grep -Eq '(^|:)35473$'

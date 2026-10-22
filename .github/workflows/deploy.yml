@@ -189,7 +189,7 @@ jobs:
           curl --fail --silent --show-error --retry 15 --retry-all-errors \
             --retry-delay 4 --retry-max-time 90 --connect-timeout 10 --max-time 15 \
             https://vpn.akalmaz.tech/healthz >/dev/null
-          timeout 10 bash -c 'exec 3<>/dev/tcp/$1/$2' _ "$DEPLOY_HOST" 8443
+          timeout 10 bash -c 'exec 3<>/dev/tcp/$1/$2' _ "$DEPLOY_HOST" 443
           ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "sudo /usr/local/sbin/my-vpn-release canary"

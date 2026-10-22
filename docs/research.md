@@ -173,9 +173,9 @@ VLESS Reality параллельно на отдельном порту, про�
 занятые reverse-proxy ресурсы необходимо повторно проверить непосредственно
 перед canary.
 
-Реализованный canary использует TCP 8443 и официальный VLESS share-link вида
-`vless://UUID@vpn.akalmaz.tech:8443?...security=reality...&pbk=...&sid=...`.
-Reality target — локальный Caddy `127.0.0.1:443`, SNI `vpn.akalmaz.tech`: это
+Реализованный canary использует TCP 443 и официальный VLESS share-link вида
+`vless://UUID@vpn.akalmaz.tech:443?...security=reality...&pbk=...&sid=...`.
+Reality target — локальный Caddy `127.0.0.1:8444`, SNI `vpn.akalmaz.tech`: это
 не превращает сервер в fallback-прокси до внешнего CDN. INCY получает годовую
 отзываемую HTTPS subscription-ссылку на полный Xray JSON. В нём объединены
 персональный VLESS Reality outbound, DNS и RU/direct-маршрутизация; отзыв

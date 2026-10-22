@@ -104,7 +104,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 ## Firewall и сеть
 
-До изменения firewall фиксируются текущий SSH-порт и рабочая сессия/rollback. Публично нужны только SSH 22, HTTP 80, HTTPS 443, VLESS Reality TCP 8443 и существующий AmneziaWG UDP 35473. SQLite, Go API и helper не публикуются.
+До изменения firewall фиксируются текущий SSH-порт и рабочая сессия/rollback. Публично нужны только SSH 22, HTTP 80, общий HTTPS/VLESS Reality TCP 443 и существующий AmneziaWG UDP 35473. Внутренний Caddy `:8444`, SQLite, Go API и helper не публикуются.
 
 Bootstrap добавляет allow-rules до включения UFW и после включения повторно проверяет SSH workflow, AWG container/tool/listener, Caddy и Xray. Он не сбрасывает Docker/Tailscale tables.
 

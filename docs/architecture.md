@@ -11,7 +11,7 @@ Read-only аудит показал Ubuntu 24.04 x86-64, 1 vCPU, 3,8 ГиБ RAM,
 ## Компоненты
 
 ```text
-браузер / INCY ──HTTPS──> Caddy :443 ──HTTP loopback──> my-vpn
+браузер / INCY ──TCP/443──> Xray Reality ──обычный TLS──> Caddy :8444 ──HTTP loopback──> my-vpn
 Telegram API <──HTTPS─── my-vpn (не принимает входящие webhook из Интернета)
                                       │
                                       ├── SQLite + локальные backups
@@ -23,7 +23,8 @@ Telegram API <──HTTPS─── my-vpn (не принимает входящ�
                                                                      └── существующий amnezia-awg2
 ```
 
-- **Caddy** завершает TLS для `vpn.akalmaz.tech`, выставляет только 80/443, добавляет security headers и не записывает activation code или конфигурации в access log.
+- **Xray Reality** принимает публичный TCP/443: авторизованный VLESS-трафик отправляет в VPN, а обычный HTTPS передаёт локальному Caddy.
+- **Caddy** завершает TLS для `vpn.akalmaz.tech` на внутреннем `:8444`, оставляет публичный HTTP/80 для ACME/redirect, добавляет security headers и не записывает activation code или конфигурации в access log.
 - **`my-vpn`** — один Go-бинарник от непривилегированного пользователя `myvpn`: HTTP API, статический русскоязычный интерфейс, long-polling Telegram-бот, rate limiting, аудит и health endpoint.
 - **SQLite** работает в WAL-режиме с `busy_timeout`; файлы БД и backup доступны только `myvpn`. Для одного семейного узла отдельная СУБД и Redis не нужны.
 - **`vpn-provisioner`** — маленький локальный адаптер с минимальными привилегиями. Он принимает только типизированные операции `CreateDevice`, `RevokeDevice`, `Status`; произвольные команды, пути и аргументы запрещены.
@@ -74,7 +75,7 @@ Telegram API <──HTTPS─── my-vpn (не принимает входящ�
 
 ## Provisioning и существующая Amnezia
 
-Новый data plane — отдельный Xray VLESS Reality на TCP 8443. Go-процесс без
+Новый data plane — отдельный Xray VLESS Reality на TCP 443. Go-процесс без
 привилегий вызывает только root-owned `reality-helper` через узкое sudoers-правило.
 Helper валидирует JSON, атомарно обновляет единственный managed Xray inbound,
 проверяет конфигурацию и откатывается при неуспешном restart. UUID хранится только
@@ -90,7 +91,7 @@ Helper валидирует JSON, атомарно обновляет единс
 - Релизы располагаются в `/opt/my-vpn/releases/<commit>/`; активный `/opt/my-vpn/current` — атомарно заменяемая symlink.
 - Конфигурация и БД находятся вне release: `/etc/my-vpn/` (`0600`, root-owned secrets) и `/var/lib/my-vpn/`.
 - Перед миграцией выполняются `sqlite3 .backup` и проверка целостности. Миграции должны быть backward-compatible как минимум с предыдущим бинарником.
-- Deploy проверяет `/healthz`, TLS, публичный TCP 8443, реальный Reality egress и production activation/subscription/revoke canary.
+- Deploy проверяет `/healthz`, TLS, публичный TCP 443, реальный Reality egress и production activation/subscription/revoke canary.
 - При неуспешном health/smoke symlink возвращается на предыдущий release и сервис перезапускается. БД откатывается только проверенной процедурой; необратимая миграция блокирует автоматический deploy.
 - Существующий `amnezia-awg2` не входит в автоматический cleanup и rollback портала.
 

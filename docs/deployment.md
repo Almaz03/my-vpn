@@ -53,14 +53,14 @@ sudo исключительно на root-owned `/usr/local/sbin/my-vpn-release`
 4. Провести offline/self-check нового бинарника.
 5. Атомарно переключить symlink `current`.
 6. Перезапустить только сервис портала; Xray перечитывается лишь при изменении peers; Amnezia не трогать.
-7. Проверить `/healthz`, внешний HTTPS/TCP 8443, Reality egress и полный activation/revoke canary.
+7. Проверить `/healthz`, внешний HTTPS/Reality на TCP 443, Reality egress и полный activation/revoke canary.
 8. При любом сбое вернуть предыдущий symlink, восстановить совместимую БД при необходимости и перезапустить предыдущую версию.
 
 Два деплоя не должны выполняться одновременно. В GitHub Actions нужен `concurrency` для production environment.
 
 ## systemd и reverse proxy
 
-`my-vpn.service` должен слушать loopback (например, `127.0.0.1:8080`). Caddy завершает TLS на 80/443 и проксирует только к loopback. Проект устанавливает отдельный snippet `/etc/caddy/conf.d/my-vpn.caddy`, но не должен самовольно переписывать основной Caddyfile. В unit рекомендуется включить:
+`my-vpn.service` должен слушать loopback (например, `127.0.0.1:8080`). Xray принимает публичный TCP/443 и передаёт обычный TLS локальному Caddy на `:8444`; Caddy проксирует только к loopback. Проект устанавливает отдельный snippet `/etc/caddy/conf.d/my-vpn.caddy`, но не должен самовольно переписывать основной Caddyfile. В unit рекомендуется включить:
 
 - отдельного непривилегированного пользователя;
 - `PrivateTmp=true`, `ProtectSystem=strict`; для портала `NoNewPrivileges=false`
@@ -74,7 +74,7 @@ sudo исключительно на root-owned `/usr/local/sbin/my-vpn-release`
 - restart policy с задержкой и разумные лимиты ресурсов.
 
 Caddyfile и unit-файлы проверяются штатными валидаторами. One-time bootstrap
-включает UFW только после правил для текущего SSH, 80/443 TCP, Reality 8443 TCP,
+включает UFW только после правил для текущего SSH, общих HTTPS/Reality 443 TCP, HTTP 80 TCP,
 AmneziaWG 35473 UDP и Tailscale, затем повторно проверяет AWG container/listener.
 
 Запуск: сначала вручную `Bootstrap production host` с подтверждением `BOOTSTRAP`,
