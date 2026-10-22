@@ -70,6 +70,20 @@
     // The flow still works when browser storage is unavailable.
   }
 
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && requestToken) {
+      showRequestStatus('Проверяем решение администратора…', 'busy');
+      pollAccessRequest();
+    }
+  });
+
+  window.addEventListener('online', () => {
+    if (requestToken) {
+      showRequestStatus('Связь восстановлена. Проверяем запрос…', 'busy');
+      pollAccessRequest();
+    }
+  });
+
   showRequestForm.addEventListener('click', () => {
     if (accessRequestPanel.hidden) {
       openRequestPanel();
@@ -352,7 +366,7 @@
       showRequestStatus('Запрос отправлен. Ожидаем решение администратора…', 'busy');
       pollTimer = window.setTimeout(pollAccessRequest, 3000);
     } catch (error) {
-      showRequestStatus(error instanceof Error ? error.message : 'Не удалось проверить запрос.', 'error');
+      showRequestStatus('Связь временно прервалась. Запрос сохранён, продолжаем ждать…', 'busy');
       pollTimer = window.setTimeout(pollAccessRequest, 5000);
     }
   }
