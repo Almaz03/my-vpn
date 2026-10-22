@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'">
+    <title>Семейный VPN — подключение устройства</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="brand" aria-label="Семейный VPN">
+        <span class="brand__mark" aria-hidden="true">A</span>
+        <span>Семейный VPN</span>
+        <span class="privacy-pill">Приватно</span>
+      </header>
+
+      <section class="card" id="activation-panel" aria-labelledby="activation-title">
+        <div class="eyebrow">Новое устройство</div>
+        <h1 id="activation-title">Подключитесь по приглашению</h1>
+        <p class="lead">Введите короткий код, который вам передал администратор семьи. Он действует ограниченное время и только один раз.</p>
+
+        <form id="activation-form" novalidate>
+          <label for="invite-code">Код приглашения</label>
+          <div class="code-row">
+            <input
+              id="invite-code"
+              name="invite-code"
+              type="text"
+              inputmode="text"
+              autocomplete="one-time-code"
+              autocapitalize="characters"
+              spellcheck="false"
+              minlength="4"
+              maxlength="16"
+              pattern="[A-Za-z0-9-]{4,16}"
+              aria-describedby="code-hint"
+              required
+            >
+            <button class="primary" type="submit" id="submit-button">Продолжить</button>
+          </div>
+          <p class="hint" id="code-hint">Можно вводить с дефисом. Код не сохраняется в браузере.</p>
+
+          <div class="device-row">
+            <span>Ваше устройство</span>
+            <strong id="platform-label">Определяем…</strong>
+            <button class="link-button" type="button" id="change-platform" aria-expanded="false" aria-controls="platform-picker">Изменить</button>
+          </div>
+
+          <fieldset id="platform-picker" class="platform-picker" hidden>
+            <legend>Выберите платформу</legend>
+            <div class="platform-grid">
+              <label><input type="radio" name="platform" value="android"> Android</label>
+              <label><input type="radio" name="platform" value="ios"> iPhone / iPad</label>
+              <label><input type="radio" name="platform" value="windows"> Windows</label>
+              <label><input type="radio" name="platform" value="macos"> macOS</label>
+              <label><input type="radio" name="platform" value="linux"> Linux</label>
+            </div>
+          </fieldset>
+        </form>
+
+        <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+      </section>
+
+      <section class="card result" id="result-panel" tabindex="-1" aria-labelledby="result-title" hidden>
+        <div class="success-mark" aria-hidden="true">✓</div>
+        <div class="eyebrow">Приглашение принято</div>
+        <h2 id="result-title">Профиль устройства готов</h2>
+        <p id="result-message">Установите INCY и импортируйте созданный профиль.</p>
+
+        <div class="steps" aria-label="Инструкция по подключению">
+          <div class="step">
+            <span class="step__number">1</span>
+            <div>
+              <h3>Установите INCY</h3>
+              <p id="install-hint">Откройте официальный сайт и выберите версию для своей платформы.</p>
+              <a class="secondary button" id="install-link" href="https://incy.cc/" rel="noreferrer noopener" target="_blank">Официальный сайт INCY</a>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step__number">2</span>
+            <div>
+              <h3>Импортируйте профиль</h3>
+              <p id="import-hint">Операционная система или приложение могут попросить подтверждение — это нормальная мера безопасности.</p>
+              <button class="primary button" type="button" id="import-button" hidden>Открыть в INCY</button>
+              <a class="secondary button" id="download-link" href="#" download hidden>Скачать конфигурацию</a>
+            </div>
+          </div>
+
+          <div class="step qr-step" id="qr-step" hidden>
+            <span class="step__number">3</span>
+            <div>
+              <h3>Или отсканируйте QR-код</h3>
+              <p>Показывайте QR-код только на доверенном устройстве.</p>
+              <img id="qr-image" width="220" height="220" alt="QR-код для импорта VPN-профиля">
+            </div>
+          </div>
+        </div>
+
+        <aside class="notice">
+          <strong>Важно</strong>
+          <span>Не пересылайте конфигурацию другим людям. Для каждого устройства нужен отдельный профиль.</span>
+        </aside>
+      </section>
+
+      <section class="card help" aria-labelledby="help-title">
+        <h2 id="help-title">Если не получается</h2>
+        <details>
+          <summary>Код не принимается</summary>
+          <p>Проверьте символы и дефисы. Код мог истечь или уже использоваться — попросите администратора создать новый.</p>
+        </details>
+        <details>
+          <summary>INCY не открывает профиль</summary>
+          <p>Сначала установите актуальную версию INCY. На iPhone, iPad и компьютерах импорт может потребовать отдельного подтверждения.</p>
+        </details>
+        <details>
+          <summary>Можно подключить второе устройство?</summary>
+          <p>Да, но для него потребуется новое приглашение и отдельный профиль.</p>
+        </details>
+      </section>
+
+      <footer>
+        <span>Сервис не хранит код приглашения в браузере.</span>
+        <span aria-hidden="true">•</span>
+        <span>Не передавайте профиль другим людям.</span>
+      </footer>
+    </main>
+    <noscript>Для безопасной активации профиля включите JavaScript в браузере.</noscript>
+  </body>
+</html>

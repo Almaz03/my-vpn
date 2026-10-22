@@ -1,0 +1,17 @@
+# Local runtime state and credentials
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+
+# Local build and test output
+/bin/
+/dist/
+coverage.out
+*.test
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
