@@ -98,7 +98,8 @@ curl --fail --location --proto '=https' --tlsv1.2 -o "$install_tmp/xray.zip" "$x
 printf '%s  %s\n' "$xray_sha256" "$install_tmp/xray.zip" | sha256sum --check -
 unzip -q "$install_tmp/xray.zip" xray geoip.dat geosite.dat -d "$install_tmp"
 install -m 0755 -o root -g root "$install_tmp/xray" /usr/local/bin/xray
-/usr/local/bin/xray version | head -n 1 | grep -Fq "Xray ${xray_version}"
+xray_version_output="$(/usr/local/bin/xray version)"
+grep -Fq "Xray ${xray_version}" <<<"$xray_version_output"
 
 install -d -m 0755 -o root -g root /opt/my-vpn /opt/my-vpn/releases
 install -d -m 0750 -o "$app_user" -g "$app_user" /var/lib/my-vpn
