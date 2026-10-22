@@ -81,6 +81,20 @@ chmod 0600 /etc/my-vpn/amneziawg.env
 awk '{print $1, $2}' "$deploy_public_key" > /etc/my-vpn/backup-age-recipient
 chmod 0644 /etc/my-vpn/backup-age-recipient
 
+# Reconcile every portal-issued profile after installing a new helper. This
+# also repairs profiles created by an older helper without changing the client
+# keys that users have already imported into AmneziaVPN.
+reconciled_profiles=0
+while IFS= read -r -d '' profile; do
+  device_id="$(basename "$profile" .conf)"
+  [[ "$device_id" =~ ^[0-9a-f]{32}$ ]] || exit 1
+  jq -cn --arg credential_ref "amneziawg:$device_id" \
+    '{version:1,credential_ref:$credential_ref}' | \
+    /usr/local/libexec/my-vpn/amneziawg-helper config >/dev/null
+  ((reconciled_profiles += 1))
+done < <(find /var/lib/my-vpn/amneziawg -maxdepth 1 -type f -name '*.conf' -print0)
+printf 'reconciled AmneziaWG profiles: %d\n' "$reconciled_profiles"
+
 install -d -m 0755 -o root -g root /etc/caddy/conf.d
 if ! grep -Eq '^[[:space:]]*import[[:space:]]+conf\.d/\*' /etc/caddy/Caddyfile; then
   install -m 0644 -o root -g root /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.pre-my-vpn.$(date -u +%Y%m%dT%H%M%SZ)"
