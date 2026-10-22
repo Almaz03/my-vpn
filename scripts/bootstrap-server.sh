@@ -102,6 +102,9 @@ install -d -m 0750 -o "$xray_user" -g "$xray_user" /etc/xray
 install -d -m 0750 -o root -g "$deploy_user" /var/backups/my-vpn
 install -d -m 0750 -o root -g caddy /var/lib/my-vpn-routing /var/lib/my-vpn-routing/routing
 install -d -m 0755 -o root -g root /usr/local/libexec/my-vpn
+install -d -m 0755 -o root -g root /usr/local/share/xray
+install -m 0644 -o root -g root "$install_tmp/geoip.dat" /usr/local/share/xray/geoip.dat
+install -m 0644 -o root -g root "$install_tmp/geosite.dat" /usr/local/share/xray/geosite.dat
 
 install -m 0755 -o root -g root "$bundle_root/scripts/install-release.sh" /usr/local/libexec/my-vpn/install-release.sh
 install -m 0755 -o root -g root "$bundle_root/scripts/rollback.sh" /usr/local/libexec/my-vpn/rollback.sh
