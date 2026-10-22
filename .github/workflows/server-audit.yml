@@ -158,6 +158,17 @@ jobs:
             echo 'amnezia-awg2 container: not present'
           fi
 
+          echo '== AmneziaWG persistence layout (paths only; no configuration contents) =='
+          if command -v docker >/dev/null 2>&1 && docker inspect amnezia-awg2 >/dev/null 2>&1; then
+            docker inspect --format '{{range .Mounts}}{{printf "%s -> %s (%s)\\n" .Source .Destination .Type}}{{end}}' amnezia-awg2
+            docker exec amnezia-awg2 sh -c '
+              command -v awg || true
+              command -v wg || true
+              find /etc /opt /config -maxdepth 4 -type f \
+                \( -name "*.conf" -o -name "*.json" \) -print 2>/dev/null | sort
+            '
+          fi
+
           echo '== SSH authorization layout (counts and modes only; no key material) =='
           getent passwd | awk -F: '($3 == 0 || ($3 >= 1000 && $3 < 65534)) {print "account=" $1, "uid=" $3, "home=" $6, "shell=" $7}'
           for home_dir in /root /home/*; do
