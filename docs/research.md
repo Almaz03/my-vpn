@@ -176,9 +176,10 @@ VLESS Reality параллельно на отдельном порту, про�
 Реализованный canary использует TCP 8443 и официальный VLESS share-link вида
 `vless://UUID@vpn.akalmaz.tech:8443?...security=reality...&pbk=...&sid=...`.
 Reality target — локальный Caddy `127.0.0.1:443`, SNI `vpn.akalmaz.tech`: это
-не превращает сервер в fallback-прокси до внешнего CDN. INCY получает ссылку
-через часовую HTTPS subscription и заголовок/строку
-`incy://autorouting/onadd/https://vpn.akalmaz.tech/routing/family-ru-direct.json`.
+не превращает сервер в fallback-прокси до внешнего CDN. INCY получает годовую
+отзываемую HTTPS subscription-ссылку на полный Xray JSON. В нём объединены
+персональный VLESS Reality outbound, DNS и RU/direct-маршрутизация; отзыв
+устройства немедленно инвалидирует ссылку. Отдельный autorouting не нужен.
 Desktop остаётся pre-alpha по официальному `incy-platforms`, поэтому server-side
 canary не заменяет тесты на физических Windows/macOS/Linux устройствах.
 

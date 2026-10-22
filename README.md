@@ -7,7 +7,8 @@
 > требуется проверить импорт INCY и RU/direct-маршрутизацию.
 
 Основной provider — `vless-reality`: отдельный UUID создаётся root-owned helper
-для каждого устройства, а портал выдаёт часовую непрозрачную subscription-ссылку.
+для каждого устройства, а портал выдаёт годовую отзывную subscription-ссылку
+на полный Xray JSON с DNS и RU/direct-маршрутизацией.
 В SQLite хранится только HMAC этой ссылки и opaque provider reference. Режим
 `noop` сохранён исключительно для локальных тестов. Telegram long polling и
 deny-by-default allowlist входят в тот же Go-процесс.

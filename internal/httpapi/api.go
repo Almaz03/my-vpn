@@ -211,16 +211,18 @@ func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "subscription temporarily unavailable")
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	contentType := payload.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store, private, max-age=0")
 	w.Header().Set("Expires", "0")
 	w.Header().Set("Profile-Title", "base64:RmFtaWx5IFZQTg==")
-	w.Header().Set("Profile-Update-Interval", "0")
-	w.Header().Set("Routing-Geo-Update-Interval", "24")
-	w.Header().Set("Autorouting", "incy://autorouting/onadd/"+a.service.RoutingProfileURL())
+	w.Header().Set("Profile-Update-Interval", "1")
 	w.Header().Set("Hide-Url", "1")
 	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", `attachment; filename="family-vpn.txt"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="family-vpn.json"`)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, payload.Body)

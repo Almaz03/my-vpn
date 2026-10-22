@@ -38,7 +38,7 @@ func (p *apiRealityProvider) Provision(_ context.Context, request provision.Devi
 func (p *apiRealityProvider) Revoke(context.Context, string) error { return nil }
 func (p *apiRealityProvider) ClientConfig(context.Context, string) (provision.ClientConfig, error) {
 	return provision.ClientConfig{
-		VLESSURI:     "vless://00000000-0000-4000-8000-000000000001@vpn.example.test:8443?security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&pbk=public&sid=abcd#Family",
+		VLESSURI:     "vless://00000000-0000-4000-8000-000000000001@vpn.example.test:8443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&fp=chrome&pbk=public&sid=abcd#Family",
 		INCYDeepLink: "incy://import/provider-secret",
 	}, nil
 }
@@ -156,11 +156,20 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 	subscriptionPath := strings.TrimPrefix(activation.DeepLink, prefix)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, subscriptionPath, nil))
-	if response.Code != http.StatusOK || !strings.HasPrefix(response.Body.String(), "vless://") {
-		t.Fatalf("subscription status=%d body=%s", response.Code, response.Body.String())
+	var fullConfig struct {
+		Remarks   string `json:"remarks"`
+		Inbounds  []any  `json:"inbounds"`
+		Outbounds []any  `json:"outbounds"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &fullConfig) != nil ||
+		fullConfig.Remarks != "Family VPN" || len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 {
+		t.Fatalf("subscription status=%d is not a full Xray configuration", response.Code)
 	}
 	if response.Header().Get("Cache-Control") != "no-store, private, max-age=0" ||
-		response.Header().Get("Autorouting") != "incy://autorouting/onadd/https://vpn.example.test/routing/family-ru-direct.json?v=5" ||
+		response.Header().Get("Content-Type") != "application/json; charset=utf-8" ||
+		response.Header().Get("Profile-Update-Interval") != "1" ||
+		response.Header().Get("Autorouting") != "" ||
+		response.Header().Get("Routing-Geo-Update-Interval") != "" ||
 		response.Header().Get("Hide-Url") != "1" {
 		t.Fatalf("unsafe subscription headers: %#v", response.Header())
 	}

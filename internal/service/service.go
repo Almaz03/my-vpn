@@ -39,8 +39,9 @@ type Activation struct {
 }
 
 type SubscriptionPayload struct {
-	Body      string
-	ExpiresAt time.Time
+	Body        string
+	ContentType string
+	ExpiresAt   time.Time
 }
 
 type AccessRequest struct {
@@ -271,7 +272,7 @@ func (s *Service) Activate(ctx context.Context, code, platform, requestedDeviceN
 		if _, ok := s.provisioner.(provision.ConfigProvider); !ok {
 			return Activation{}, s.compensateProvisioning(ctx, device, result, errors.New("active provisioner cannot retrieve client config"))
 		}
-		subscriptionToken, err = s.issueSubscription(ctx, device.ID, time.Hour)
+		subscriptionToken, err = s.issueSubscription(ctx, device.ID, 365*24*time.Hour)
 		if err != nil {
 			return Activation{}, s.compensateProvisioning(ctx, device, result, err)
 		}
@@ -322,9 +323,11 @@ func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionP
 	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
-	routingURL := s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json"}).String()
-	body := client.VLESSURI + "\nincy://autorouting/onadd/" + routingURL + "\n"
-	return SubscriptionPayload{Body: body, ExpiresAt: subscription.ExpiresAt}, nil
+	body, err := buildFullXrayConfig(client.VLESSURI)
+	if err != nil {
+		return SubscriptionPayload{}, ErrProvisioning
+	}
+	return SubscriptionPayload{Body: body, ContentType: "application/json; charset=utf-8", ExpiresAt: subscription.ExpiresAt}, nil
 }
 
 func (s *Service) RoutingProfileURL() string {
@@ -345,7 +348,7 @@ func (s *Service) RoutingProfile() RoutingProfile {
 		DomesticDNSType: "DoU", DomesticDNSDomain: "", DomesticDNSIP: "77.88.8.8",
 		GeoIPURL: geoIP, GeositeURL: geosite,
 		DNSHosts:    map[string]string{},
-		DirectSites: []string{"domain:ru", "domain:xn--p1ai", "domain:gosuslugi.ru", "domain:nalog.gov.ru", "domain:mos.ru", "domain:sberbank.ru", "domain:tbank.ru", "domain:alfabank.ru", "domain:ozon.ru", "domain:wildberries.ru"},
+		DirectSites: append([]string(nil), familyDirectDomains...),
 		DirectIP:    []string{"geoip:private", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8"},
 		ProxySites:  []string{}, ProxyIP: []string{}, BlockSites: []string{}, BlockIP: []string{},
 		DomainStrategy: "AsIs", FakeDNS: "false",

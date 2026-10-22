@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -33,7 +34,8 @@ func (p *subscriptionProvisioner) Provision(_ context.Context, request provision
 		p.configs = make(map[string]provision.ClientConfig)
 	}
 	credential := "vless-reality:" + request.DeviceID
-	uri := "vless://" + request.DeviceID + "@vpn.example.test:8443?security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&pbk=public&sid=abcd#Family"
+	uuid := "00000000-0000-4000-8000-" + request.DeviceID[:12]
+	uri := "vless://" + uuid + "@vpn.example.test:8443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&fp=chrome&pbk=public&sid=abcd#Family"
 	p.configs[credential] = provision.ClientConfig{VLESSURI: uri, INCYDeepLink: "incy://import/test"}
 	return provision.Result{CredentialRef: credential, State: "active", INCYDeepLink: "incy://import/test"}, nil
 }
@@ -209,8 +211,20 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	}
 	token := strings.TrimPrefix(activation.INCYDeepLink, prefix)
 	payload, err := application.Subscription(context.Background(), token)
-	if err != nil || !strings.HasPrefix(payload.Body, "vless://") || !strings.Contains(payload.Body, "incy://autorouting/onadd/") {
-		t.Fatalf("payload=%q err=%v", payload.Body, err)
+	if err != nil || payload.ContentType != "application/json; charset=utf-8" {
+		t.Fatalf("subscription err=%v content-type=%q", err, payload.ContentType)
+	}
+	var fullConfig struct {
+		Remarks   string `json:"remarks"`
+		Inbounds  []any  `json:"inbounds"`
+		Outbounds []any  `json:"outbounds"`
+		Routing   struct {
+			Rules []any `json:"rules"`
+		} `json:"routing"`
+	}
+	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.Remarks != "Family VPN" ||
+		len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 || len(fullConfig.Routing.Rules) < 1 {
+		t.Fatal("subscription is not a complete Family VPN Xray configuration")
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
