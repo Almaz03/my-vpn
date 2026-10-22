@@ -1,0 +1,75 @@
+name: Encrypted off-host backup
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts"
+
+      - name: Create and download encrypted backup
+        id: backup
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          DEPLOY_USER=my-vpn-deploy
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+          remote_path="$(ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo /usr/local/sbin/my-vpn-release backup")"
+          [[ "$remote_path" =~ ^/var/backups/my-vpn/(20[0-9]{6}T[0-9]{6}Z\.age)$ ]]
+          filename="${BASH_REMATCH[1]}"
+          mkdir -p "$RUNNER_TEMP/backup"
+          scp -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -P "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_path" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_path.sha256" \
+            "$RUNNER_TEMP/backup/"
+          (
+            cd "$RUNNER_TEMP/backup"
+            sha256sum --check "$filename.sha256"
+          )
+          printf 'filename=%s\n' "$filename" >> "$GITHUB_OUTPUT"
+
+      - name: Store encrypted backup off-host
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-backup-${{ steps.backup.outputs.filename }}
+          path: |
+            ${{ runner.temp }}/backup/${{ steps.backup.outputs.filename }}
+            ${{ runner.temp }}/backup/${{ steps.backup.outputs.filename }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove temporary SSH and backup material
+        if: always()
+        shell: bash
+        run: rm -rf "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts" "$RUNNER_TEMP/backup"

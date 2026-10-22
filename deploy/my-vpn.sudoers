@@ -1,0 +1,4 @@
+Defaults:my-vpn-deploy !requiretty
+Defaults:my-vpn !requiretty
+my-vpn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/my-vpn-release *
+my-vpn ALL=(root) NOPASSWD: /usr/local/libexec/my-vpn/reality-helper *

@@ -74,16 +74,15 @@ Telegram API <──HTTPS─── my-vpn (не принимает входящ�
 
 ## Provisioning и существующая Amnezia
 
-До реализации рабочего адаптера необходимо сохранить backup конфигурации контейнера и зафиксировать его image digest, volumes, network mode, health и активные peer без приватных ключей. Не следует угадывать внутренние пути или формат Amnezia.
+Новый data plane — отдельный Xray VLESS Reality на TCP 8443. Go-процесс без
+привилегий вызывает только root-owned `reality-helper` через узкое sudoers-правило.
+Helper валидирует JSON, атомарно обновляет единственный managed Xray inbound,
+проверяет конфигурацию и откатывается при неуспешном restart. UUID хранится только
+в защищённом Xray config; SQLite содержит `vless-reality:<device-id>`.
 
-Рекомендуемый порядок:
-
-1. Реализовать интерфейс provisioner и in-memory/test provider.
-2. Исследовать конкретную версию `amnezia-awg2` read-only.
-3. Сделать адаптер с allowlist-командами и идемпотентными операциями по opaque `provider_ref`.
-4. Создать canary-peer; проверить подключение, RU/direct, foreign/proxy и DNS с отдельного тестового устройства.
-5. Проверить отзыв canary и восстановление после перезапуска.
-6. Только затем разрешить создание семейных устройств. Существующий peer не удалять автоматически.
+`amnezia-awg2` на UDP 35473 остаётся отдельным работающим rollback-контуром и не
+входит ни в provisioning, ни в cleanup. Аудит подтвердил активного peer, поэтому
+автоматическое отключение/удаление Amnezia запрещено.
 
 ## Развёртывание и rollback
 
@@ -91,7 +90,7 @@ Telegram API <──HTTPS─── my-vpn (не принимает входящ�
 - Релизы располагаются в `/opt/my-vpn/releases/<commit>/`; активный `/opt/my-vpn/current` — атомарно заменяемая symlink.
 - Конфигурация и БД находятся вне release: `/etc/my-vpn/` (`0600`, root-owned secrets) и `/var/lib/my-vpn/`.
 - Перед миграцией выполняются `sqlite3 .backup` и проверка целостности. Миграции должны быть backward-compatible как минимум с предыдущим бинарником.
-- Deploy запускает новый бинарник на loopback canary-порту, проверяет `/healthz` и smoke activation с fake provider, затем переключает symlink и перезапускает systemd.
+- Deploy проверяет `/healthz`, TLS, публичный TCP 8443, реальный Reality egress и production activation/subscription/revoke canary.
 - При неуспешном health/smoke symlink возвращается на предыдущий release и сервис перезапускается. БД откатывается только проверенной процедурой; необратимая миграция блокирует автоматический deploy.
 - Существующий `amnezia-awg2` не входит в автоматический cleanup и rollback портала.
 

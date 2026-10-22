@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,6 +32,33 @@ type Activation struct {
 	ConfigDownloadURL string
 	QRCodeURL         string
 	Message           string
+}
+
+type SubscriptionPayload struct {
+	Body      string
+	ExpiresAt time.Time
+}
+
+type RoutingProfile struct {
+	Name              string            `json:"Name"`
+	GlobalProxy       string            `json:"GlobalProxy"`
+	RemoteDNSType     string            `json:"RemoteDNSType"`
+	RemoteDNSDomain   string            `json:"RemoteDNSDomain"`
+	RemoteDNSIP       string            `json:"RemoteDNSIP"`
+	DomesticDNSType   string            `json:"DomesticDNSType"`
+	DomesticDNSDomain string            `json:"DomesticDNSDomain"`
+	DomesticDNSIP     string            `json:"DomesticDNSIP"`
+	GeoIPURL          string            `json:"Geoipurl"`
+	GeositeURL        string            `json:"Geositeurl"`
+	DNSHosts          map[string]string `json:"DnsHosts"`
+	DirectSites       []string          `json:"DirectSites"`
+	DirectIP          []string          `json:"DirectIp"`
+	ProxySites        []string          `json:"ProxySites"`
+	ProxyIP           []string          `json:"ProxyIp"`
+	BlockSites        []string          `json:"BlockSites"`
+	BlockIP           []string          `json:"BlockIp"`
+	DomainStrategy    string            `json:"DomainStrategy"`
+	FakeDNS           string            `json:"FakeDNS"`
 }
 
 var (
@@ -89,22 +118,96 @@ func (s *Service) Activate(ctx context.Context, code, platform, requestedDeviceN
 	if err := validateProvisionResult(result); err != nil {
 		return Activation{}, s.compensateProvisioning(ctx, device, result, err)
 	}
+	var subscriptionToken string
+	if result.State == "active" {
+		if _, ok := s.provisioner.(provision.ConfigProvider); !ok {
+			return Activation{}, s.compensateProvisioning(ctx, device, result, errors.New("active provisioner cannot retrieve client config"))
+		}
+		subscriptionToken, err = s.issueSubscription(ctx, device.ID, time.Hour)
+		if err != nil {
+			return Activation{}, s.compensateProvisioning(ctx, device, result, err)
+		}
+	}
 	if err := s.store.UpdateProvisioned(ctx, device.ID, result.CredentialRef, result.State); err != nil {
 		return Activation{}, s.compensateProvisioning(ctx, device, result, err)
 	}
 	activation.Device.CredentialRef = result.CredentialRef
 	activation.Device.State = result.State
-	if strings.HasPrefix(result.INCYDeepLink, "incy://") {
-		activation.INCYDeepLink = result.INCYDeepLink
-	}
-	if safeRelativePath(result.ConfigPath) {
-		activation.ConfigDownloadURL = s.baseURL.ResolveReference(&url.URL{Path: result.ConfigPath}).String()
-		activation.QRCodeURL = s.baseURL.ResolveReference(&url.URL{Path: "/api/v1/devices/" + device.ID + "/qr"}).String()
+	if result.State == "active" {
+		subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + subscriptionToken}).String()
+		activation.INCYDeepLink = "incy://add/" + subscriptionURL
+		activation.ConfigDownloadURL = subscriptionURL + "?download=1"
+		activation.QRCodeURL = subscriptionURL + "/qr"
 	}
 	if activation.Device.State == "active" {
 		activation.Message = "VPN-профиль готов к импорту."
 	}
 	return activation, nil
+}
+
+func (s *Service) issueSubscription(ctx context.Context, deviceID string, ttl time.Duration) (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw[:])
+	if err := s.store.IssueSubscription(ctx, s.subscriptionHMAC(token), deviceID, s.now().Add(ttl)); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionPayload, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != token {
+		return SubscriptionPayload{}, store.ErrSubscriptionNotFound
+	}
+	subscription, err := s.store.ResolveSubscription(ctx, s.subscriptionHMAC(token))
+	if err != nil {
+		return SubscriptionPayload{}, err
+	}
+	provider, ok := s.provisioner.(provision.ConfigProvider)
+	if !ok {
+		return SubscriptionPayload{}, errors.New("provisioner does not support subscriptions")
+	}
+	client, err := provider.ClientConfig(ctx, subscription.CredentialRef)
+	if err != nil {
+		return SubscriptionPayload{}, ErrProvisioning
+	}
+	routingURL := s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json"}).String()
+	body := client.VLESSURI + "\nincy://autorouting/onadd/" + routingURL + "\n"
+	return SubscriptionPayload{Body: body, ExpiresAt: subscription.ExpiresAt}, nil
+}
+
+func (s *Service) RoutingProfileURL() string {
+	return s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json"}).String()
+}
+
+func (s *Service) SubscriptionDeepLink(token string) string {
+	subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + token}).String()
+	return "incy://add/" + subscriptionURL
+}
+
+func (s *Service) RoutingProfile() RoutingProfile {
+	geoIP := s.baseURL.ResolveReference(&url.URL{Path: "/routing/geoip.dat"}).String()
+	geosite := s.baseURL.ResolveReference(&url.URL{Path: "/routing/geosite.dat"}).String()
+	return RoutingProfile{
+		Name: "Family RU Direct", GlobalProxy: "true",
+		RemoteDNSType: "DoH", RemoteDNSDomain: "https://cloudflare-dns.com/dns-query", RemoteDNSIP: "1.1.1.1",
+		DomesticDNSType: "DoH", DomesticDNSDomain: "https://common.dot.dns.yandex.net/dns-query", DomesticDNSIP: "77.88.8.8",
+		GeoIPURL: geoIP, GeositeURL: geosite,
+		DNSHosts:    map[string]string{"cloudflare-dns.com": "1.1.1.1", "common.dot.dns.yandex.net": "77.88.8.8"},
+		DirectSites: []string{"geosite:ru", "domain:gosuslugi.ru", "domain:nalog.gov.ru", "domain:mos.ru", "domain:sberbank.ru", "domain:tbank.ru", "domain:alfabank.ru", "domain:ozon.ru", "domain:wildberries.ru"},
+		DirectIP:    []string{"geoip:ru", "geoip:private", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8"},
+		ProxySites:  []string{}, ProxyIP: []string{}, BlockSites: []string{}, BlockIP: []string{},
+		DomainStrategy: "IPIfNonMatch", FakeDNS: "false",
+	}
+}
+
+func (s *Service) subscriptionHMAC(token string) []byte {
+	mac := hmac.New(sha256.New, s.hmacKey)
+	_, _ = mac.Write([]byte("subscription-token:\x00" + token))
+	return mac.Sum(nil)
 }
 
 func (s *Service) AllowActivationAttempt(ctx context.Context, remoteIP string) (bool, time.Duration, error) {
@@ -128,6 +231,19 @@ func (s *Service) ipHash(remoteIP string) string {
 func (s *Service) ListDevices(ctx context.Context) ([]store.Device, error) {
 	return s.store.ListDevices(ctx)
 }
+
+func (s *Service) ListInvitations(ctx context.Context) ([]store.Invitation, error) {
+	return s.store.ListInvitations(ctx)
+}
+
+func (s *Service) ExtendInvitation(ctx context.Context, id string, ttl time.Duration) (store.Invitation, error) {
+	if strings.TrimSpace(id) == "" || ttl < time.Minute || ttl > time.Hour {
+		return store.Invitation{}, store.ErrInvalidInvitation
+	}
+	return s.store.ExtendInvitation(ctx, id, s.now().Add(ttl))
+}
+
+func (s *Service) Stats(ctx context.Context) (store.Stats, error) { return s.store.Stats(ctx) }
 
 func (s *Service) RevokeInvitation(ctx context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {

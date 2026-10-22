@@ -32,11 +32,17 @@ func main() {
 	}
 	defer database.Close()
 
-	// Constructing the allowlist here makes the authorization boundary explicit.
-	// A Telegram polling transport is intentionally deferred until its commands
-	// can use the same audited service methods without returning VPN credentials.
-	_ = telegram.NewAllowlist(configuration.TelegramAdmins)
-	application := service.New(database, provision.Noop{}, configuration.InviteHMACKey, configuration.PublicBaseURL)
+	var deviceProvisioner provision.Provisioner
+	switch configuration.ProvisionerMode {
+	case "noop":
+		deviceProvisioner = provision.Noop{}
+	case "vless-reality":
+		deviceProvisioner = provision.NewReality()
+	default:
+		logger.Error("unsupported provisioner mode")
+		os.Exit(1)
+	}
+	application := service.New(database, deviceProvisioner, configuration.InviteHMACKey, configuration.PublicBaseURL)
 	api := httpapi.New(application, database, configuration.AdminAPIToken, configuration.WebRoot, configuration.InviteTTL)
 	server := &http.Server{
 		Addr: configuration.ListenAddr, Handler: api.Handler(),
@@ -46,6 +52,23 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if configuration.TelegramBotToken != "" {
+		bot, err := telegram.New(telegram.Config{
+			Token: configuration.TelegramBotToken, Admins: configuration.TelegramAdmins,
+			Application: telegramAdapter{service: application, store: database, provisionerMode: configuration.ProvisionerMode},
+			OffsetStore: telegram.FileOffsetStore{Path: configuration.TelegramOffsetPath},
+		})
+		if err != nil {
+			logger.Error("Telegram configuration rejected", "error", err)
+			os.Exit(1)
+		}
+		go func() {
+			if err := bot.Run(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("Telegram transport stopped", "error", err)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

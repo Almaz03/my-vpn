@@ -9,14 +9,17 @@ vpn.akalmaz.tech {
 		-Server
 	}
 
-	reverse_proxy 127.0.0.1:8080
-
-	log {
-		output file /var/log/caddy/my-vpn-access.log {
-			roll_size 10MiB
-			roll_keep 5
-			roll_keep_for 168h
-		}
-		format json
+	@geo path /routing/geoip.dat /routing/geoip.dat.sha256 /routing/geosite.dat /routing/geosite.dat.sha256
+	handle @geo {
+		root * /var/lib/my-vpn-routing
+		file_server
+		header Cache-Control "public, max-age=86400, immutable"
 	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# Access logging is intentionally disabled: subscription credentials are
+	# carried in /s/{token} and must never be written to disk or journald.
 }

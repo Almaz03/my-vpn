@@ -27,10 +27,5 @@ fi
 
 systemctl disable --now my-vpn.service >/dev/null 2>&1 || true
 rm -f "$base/current"
-rm -f /etc/caddy/conf.d/my-vpn.caddy
-if command -v caddy >/dev/null 2>&1 && systemctl is-active --quiet caddy.service; then
-  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-  systemctl reload caddy.service
-fi
 
 echo "deactivated failed first release $version"

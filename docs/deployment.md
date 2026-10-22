@@ -16,12 +16,11 @@
 - резервная копия SQLite, server-side конфигурации и метаданных текущего релиза;
 - подтверждено, что 80/443 свободны и firewall сохраняет текущий SSH-порт и UDP 35473.
 
-Текущий read-only аудит выполнялся через `root`, но этот доступ нельзя считать
-приемлемой постоянной CI-схемой. До включения production gate требуется отдельный
-deploy-пользователь и ограниченный `sudoers` только для заранее установленного,
-root-owned installer/rollback entrypoint. Workflow не должен иметь возможность
-запускать произвольный загруженный скрипт от root. До выполнения этого требования
-`ENABLE_PRODUCTION_DEPLOY` должен оставаться выключенным.
+Первичный bootstrap выполняется один раз через существующий `root` secret. Он
+устанавливает `my-vpn-deploy` только с public key текущего deploy-ключа и даёт ему
+sudo исключительно на root-owned `/usr/local/sbin/my-vpn-release`. Обычные deploy
+и backup больше не используют root SSH. Загруженный release tar проходит whitelist
+путей и типов до распаковки root-процессом.
 
 ## Целевая раскладка
 
@@ -32,12 +31,19 @@ root-owned installer/rollback entrypoint. Workflow не должен иметь 
   releases/<version>/
   current -> releases/<version>
 /var/lib/my-vpn/
-  backups/
+  my-vpn.db
+/var/backups/my-vpn/
+  <timestamp>.age
 /etc/my-vpn/
   my-vpn.env
+/etc/xray/config.json
 ```
 
-Приватные файлы принадлежат отдельному системному пользователю, имеют минимально необходимые права, а `/etc/my-vpn/my-vpn.env` — `0600`. Приватные VPN-ключи генерируются на сервере и не входят в GitHub artifacts. Сборка и установка выполняются скриптами `scripts/build-release.sh` и `scripts/install-release.sh`; явный откат — `scripts/rollback.sh`.
+Приватные файлы имеют минимальные права; `/etc/my-vpn/my-vpn.env` — `0640`
+`root:my-vpn`, чтобы непривилегированный сервис мог прочитать его. VPN credentials
+генерируются на сервере и не входят в GitHub artifacts. Сборка и установка
+выполняются скриптами `scripts/build-release.sh` и `scripts/install-release.sh`;
+явный откат — `scripts/rollback.sh`.
 
 ## Atomic deployment
 
@@ -46,8 +52,8 @@ root-owned installer/rollback entrypoint. Workflow не должен иметь 
 3. Выполнить совместимую миграцию БД с предварительным backup.
 4. Провести offline/self-check нового бинарника.
 5. Атомарно переключить symlink `current`.
-6. Перезапустить только сервис портала; Amnezia не трогать.
-7. Дождаться локального `/healthz`, затем проверить HTTPS и безопасный smoke test.
+6. Перезапустить только сервис портала; Xray перечитывается лишь при изменении peers; Amnezia не трогать.
+7. Проверить `/healthz`, внешний HTTPS/TCP 8443, Reality egress и полный activation/revoke canary.
 8. При любом сбое вернуть предыдущий symlink, восстановить совместимую БД при необходимости и перезапустить предыдущую версию.
 
 Два деплоя не должны выполняться одновременно. В GitHub Actions нужен `concurrency` для production environment.
@@ -62,7 +68,13 @@ root-owned installer/rollback entrypoint. Workflow не должен иметь 
 - ограничение capabilities и системных вызовов после проверки совместимости;
 - restart policy с задержкой и разумные лимиты ресурсов.
 
-Caddyfile и unit-файл сначала проверяются штатными валидаторами. Firewall не меняется workflow автоматически: правила применяются отдельной контролируемой операцией, сохраняя SSH и UDP 35473.
+Caddyfile и unit-файлы проверяются штатными валидаторами. One-time bootstrap
+включает UFW только после правил для текущего SSH, 80/443 TCP, Reality 8443 TCP,
+AmneziaWG 35473 UDP и Tailscale, затем повторно проверяет AWG container/listener.
+
+Запуск: сначала вручную `Bootstrap production host` с подтверждением `BOOTSTRAP`,
+затем `Build and deploy production` с `deploy=true`. Автодеплой push включается
+только variables `ENABLE_PRODUCTION_DEPLOY=true` и `PROVISIONER_MODE=vless-reality`.
 
 ## Проверки после развёртывания
 

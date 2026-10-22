@@ -50,11 +50,20 @@ jobs:
             exit 1
           fi
 
-      - name: Build versioned release
+      - name: Build reproducible versioned release
         shell: bash
         env:
           VERSION: ${{ github.sha }}
-        run: scripts/build-release.sh "$VERSION" "$RUNNER_TEMP/release"
+          SOURCE_DATE_EPOCH: "1700000000"
+        run: |
+          set -euo pipefail
+          scripts/build-release.sh "$VERSION" "$RUNNER_TEMP/release-a"
+          scripts/build-release.sh "$VERSION" "$RUNNER_TEMP/release-b"
+          cmp "$RUNNER_TEMP/release-a/my-vpn-$VERSION.tar.gz" \
+            "$RUNNER_TEMP/release-b/my-vpn-$VERSION.tar.gz"
+          cmp "$RUNNER_TEMP/release-a/my-vpn-$VERSION.tar.gz.sha256" \
+            "$RUNNER_TEMP/release-b/my-vpn-$VERSION.tar.gz.sha256"
+          mv "$RUNNER_TEMP/release-a" "$RUNNER_TEMP/release"
 
       - name: Upload immutable release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -69,15 +78,15 @@ jobs:
   deploy:
     needs: build
     if: >-
-      vars.ENABLE_PRODUCTION_DEPLOY == 'true' &&
-      vars.PROVISIONER_MODE != '' &&
-      vars.PROVISIONER_MODE != 'noop' &&
-      (github.event_name == 'push' || inputs.deploy)
+      (github.event_name == 'push' &&
+       vars.ENABLE_PRODUCTION_DEPLOY == 'true' &&
+       vars.PROVISIONER_MODE == 'vless-reality') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: production
     steps:
-      - name: Check out deployment scripts
+      - name: Check out deployment metadata
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Download verified build output
@@ -104,20 +113,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ADMIN_IDS: ${{ secrets.TELEGRAM_ADMIN_IDS }}
-          PROVISIONER_MODE: ${{ vars.PROVISIONER_MODE }}
         run: |
           set -euo pipefail
           [[ "$TELEGRAM_BOT_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
           [[ "$TELEGRAM_ADMIN_IDS" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]
-          [[ "$PROVISIONER_MODE" =~ ^[a-z0-9_-]+$ ]]
-          [[ "$PROVISIONER_MODE" != "noop" ]]
           umask 077
           {
             printf 'APP_LISTEN=127.0.0.1:8080\n'
             printf 'APP_DB_PATH=/var/lib/my-vpn/my-vpn.db\n'
             printf 'PUBLIC_BASE_URL=https://vpn.akalmaz.tech\n'
             printf 'WEB_ROOT=/opt/my-vpn/current/web\n'
-            printf 'PROVISIONER_MODE=%s\n' "$PROVISIONER_MODE"
+            printf 'PROVISIONER_MODE=vless-reality\n'
             printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
             printf 'TELEGRAM_ADMIN_IDS=%s\n' "$TELEGRAM_ADMIN_IDS"
           } > "$RUNNER_TEMP/runtime.env"
@@ -128,69 +134,64 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           VERSION: ${{ github.sha }}
         run: |
           set -euo pipefail
-          remote_dir="/tmp/my-vpn-$VERSION"
-          remote_created=false
-          ssh_args=(
-            -i "$HOME/.ssh/deploy_key"
-            -o BatchMode=yes
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -p "$DEPLOY_PORT"
-          )
+          DEPLOY_USER=my-vpn-deploy
+          [[ "$DEPLOY_HOST" =~ ^([A-Za-z0-9.-]+|[0-9]{1,3}(\.[0-9]{1,3}){3})$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          remote_dir="/var/lib/my-vpn-deploy/incoming/$VERSION"
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
           cleanup_remote() {
-            if [[ "$remote_created" == true ]]; then
-              ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf '$remote_dir'" || true
-            fi
+            ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf '$remote_dir'" || true
           }
           trap cleanup_remote EXIT
           previous_version="$(ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "if test -L /opt/my-vpn/current; then basename \"\$(readlink -f /opt/my-vpn/current)\"; fi")"
+            "sudo /usr/local/sbin/my-vpn-release current")"
           if [[ -n "$previous_version" && ! "$previous_version" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Existing release link does not contain a full commit SHA." >&2
             exit 1
           fi
           printf 'previous_version=%s\n' "$previous_version" >> "$GITHUB_OUTPUT"
           ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "command -v caddy >/dev/null && command -v sqlite3 >/dev/null && command -v openssl >/dev/null && command -v curl >/dev/null && systemctl is-active --quiet caddy.service && grep -Eq '^[[:space:]]*import[[:space:]]+conf\\.d/\\*' /etc/caddy/Caddyfile"
-          ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "umask 077; mkdir -p '$remote_dir'"
-          remote_created=true
+            "sudo /usr/local/sbin/my-vpn-release preflight"
           ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo systemd-run --quiet --collect --on-active=30m /usr/bin/rm -rf '$remote_dir'"
-          scp -i "$HOME/.ssh/deploy_key" \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -P "$DEPLOY_PORT" \
+            "umask 077; mkdir '$remote_dir'"
+          scp -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -P "$DEPLOY_PORT" \
             "$RUNNER_TEMP/release/my-vpn-$VERSION.tar.gz" \
             "$RUNNER_TEMP/release/my-vpn-$VERSION.tar.gz.sha256" \
             "$RUNNER_TEMP/runtime.env" \
-            scripts/install-release.sh \
-            scripts/rollback.sh \
-            scripts/deactivate-release.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$remote_dir/"
           if ! ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo bash '$remote_dir/install-release.sh' '$VERSION' '$remote_dir/my-vpn-$VERSION.tar.gz' '$remote_dir/my-vpn-$VERSION.tar.gz.sha256' '$remote_dir/runtime.env'"; then
+            "sudo /usr/local/sbin/my-vpn-release install '$VERSION'"; then
             if [[ -n "$previous_version" ]]; then
               ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-                "if test -x /usr/local/libexec/my-vpn/rollback.sh; then sudo /usr/local/libexec/my-vpn/rollback.sh '$previous_version'; fi"
+                "sudo /usr/local/sbin/my-vpn-release rollback '$previous_version'" || true
             else
               ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-                "sudo bash '$remote_dir/deactivate-release.sh' '$VERSION'"
+                "sudo /usr/local/sbin/my-vpn-release deactivate '$VERSION'" || true
             fi
             exit 1
           fi
 
-      - name: Public smoke test
+      - name: Public portal and Reality canary
         id: public_smoke
         continue-on-error: true
         shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error \
-            --retry 5 --retry-all-errors --retry-delay 2 \
-            --max-time 10 https://vpn.akalmaz.tech/healthz >/dev/null
+          DEPLOY_USER=my-vpn-deploy
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            --retry-delay 2 --max-time 10 https://vpn.akalmaz.tech/healthz >/dev/null
+          timeout 10 bash -c 'exec 3<>/dev/tcp/$1/$2' _ "$DEPLOY_HOST" 8443
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo /usr/local/sbin/my-vpn-release canary"
 
       - name: Roll back after failed public smoke test
         if: steps.public_smoke.outcome == 'failure' && steps.install.outputs.previous_version != ''
@@ -198,14 +199,13 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           PREVIOUS_VERSION: ${{ steps.install.outputs.previous_version }}
         run: |
           set -euo pipefail
-          ssh -i "$HOME/.ssh/deploy_key" \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo /usr/local/libexec/my-vpn/rollback.sh '$PREVIOUS_VERSION'"
+          DEPLOY_USER=my-vpn-deploy
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo /usr/local/sbin/my-vpn-release rollback '$PREVIOUS_VERSION'"
 
       - name: Stop a failed first release
         if: steps.public_smoke.outcome == 'failure' && steps.install.outputs.previous_version == ''
@@ -213,13 +213,12 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -euo pipefail
-          ssh -i "$HOME/.ssh/deploy_key" \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo /usr/local/libexec/my-vpn/deactivate-release.sh '${{ github.sha }}'"
+          DEPLOY_USER=my-vpn-deploy
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo /usr/local/sbin/my-vpn-release deactivate '${{ github.sha }}'"
 
       - name: Fail deployment after smoke-test rollback
         if: steps.public_smoke.outcome == 'failure'

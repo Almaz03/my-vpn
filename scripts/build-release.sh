@@ -31,25 +31,17 @@ cp -a web "$stage/package/web"
 if [[ -d migrations ]]; then
   cp -a migrations "$stage/package/migrations"
 fi
-mkdir -p "$stage/package/deploy"
-cp deploy/my-vpn.service \
-  deploy/my-vpn-backup.service \
-  deploy/my-vpn-backup.timer \
-  deploy/Caddyfile \
-  "$stage/package/deploy/"
-mkdir -p "$stage/package/scripts"
-cp scripts/backup.sh \
-  scripts/restore-backup.sh \
-  scripts/rollback.sh \
-  scripts/deactivate-release.sh \
-  "$stage/package/scripts/"
 printf '%s\n' "$version" > "$stage/package/VERSION"
+find "$stage/package" -type d -exec chmod 0755 {} +
+find "$stage/package" -type f -exec chmod 0644 {} +
+chmod 0755 "$stage/package/my-vpn"
 (
   cd "$stage/package"
   find . -type f ! -name MANIFEST.sha256 -print0 \
     | sort -z \
     | xargs -0 sha256sum > MANIFEST.sha256
 )
+chmod 0644 "$stage/package/MANIFEST.sha256"
 
 artifact="$output_dir/my-vpn-$version.tar.gz"
 tar --sort=name \

@@ -42,14 +42,14 @@
 
 - Один ключ/UUID на одно устройство; совместное использование запрещено даже при технической возможности.
 - Приватный ключ генерируется максимально близко к data plane или однократно в защищённой памяти процесса; не попадает в SQLite, Telegram, audit или backup портала.
-- Portal отдаёт конфигурацию только по HTTPS, один раз, с `Cache-Control: no-store`, `Pragma: no-cache`, CSP и без сторонней аналитики.
+- Portal отдаёт конфигурацию только по HTTPS через часовую HMAC-backed subscription с `Cache-Control: no-store`, CSP и без сторонней аналитики; отзыв устройства немедленно инвалидирует ссылку.
 - QR/deep link строится в браузере либо в памяти сервера и не записывается на диск. URL не содержит invitation code в query/path.
 - Отзыв адресуется opaque device ID/provider ref; bulk wildcard и выбор по пользовательской строке запрещены.
 
 ## HTTP и frontend
 
 - TLS 1.2+ через Caddy, HSTS после успешной проверки домена, `X-Content-Type-Options: nosniff`, строгая CSP, `Referrer-Policy: no-referrer`, `Permissions-Policy`.
-- State-changing admin endpoints используют отдельную сессию, `HttpOnly; Secure; SameSite=Strict`, CSRF token и re-auth для revoke.
+- Admin endpoints требуют отдельный bearer token; web-admin держит его только в памяти вкладки, не в URL/storage. CORS не включён, CSP запрещает сторонние scripts, revoke требует явного подтверждения UI.
 - Публичная активация принимает небольшой JSON body, проверяет `Content-Type`, длины и допустимые символы. Таймауты сервера обязательны.
 - Не доверять `X-Forwarded-For` от Интернета; Caddy перезаписывает заголовок, приложение принимает его только с loopback peer.
 - `/healthz` сообщает только состояние процесса/БД; детальные метрики слушают loopback или требуют admin auth.
@@ -99,9 +99,9 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 ## Firewall и сеть
 
-До изменения firewall фиксируются текущий SSH-порт и рабочая сессия/rollback. Публично нужны только SSH 22 (желательно ограничить административными адресами/Tailscale), HTTP 80, HTTPS 443 и существующий AmneziaWG UDP 35473. SQLite, Go API, provisioner socket и метрики не публикуются.
+До изменения firewall фиксируются текущий SSH-порт и рабочая сессия/rollback. Публично нужны только SSH 22, HTTP 80, HTTPS 443, VLESS Reality TCP 8443 и существующий AmneziaWG UDP 35473. SQLite, Go API и helper не публикуются.
 
-UFW по аудиту неактивен; включение допустимо только отдельным изменением после backup правил, явного разрешения SSH и проверки второй сессией. Наличие nftables-таблиц Docker/Amnezia не считается полноценной host firewall policy.
+Bootstrap добавляет allow-rules до включения UFW и после включения повторно проверяет SSH workflow, AWG container/tool/listener, Caddy и Xray. Он не сбрасывает Docker/Tailscale tables.
 
 ## Backup и восстановление
 

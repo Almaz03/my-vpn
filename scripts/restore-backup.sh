@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: $0 /var/backups/my-vpn/TIMESTAMP" >&2
+if [[ $# -ne 2 ]]; then
+  echo "usage: restore-backup.sh BACKUP.age AGE_IDENTITY_FILE" >&2
   exit 2
 fi
 if [[ "$EUID" -ne 0 ]]; then
@@ -10,74 +10,98 @@ if [[ "$EUID" -ne 0 ]]; then
   exit 1
 fi
 
-backup_dir="$(realpath "$1")"
-case "$backup_dir" in
-  /var/backups/my-vpn/20??????T??????Z) ;;
-  *) echo "backup must be a timestamped directory below /var/backups/my-vpn" >&2; exit 2 ;;
+backup="$(realpath "$1")"
+identity="$(realpath "$2")"
+case "$backup" in
+  /var/backups/my-vpn/20??????T??????Z.age) ;;
+  *) echo "backup must be an encrypted timestamped archive below /var/backups/my-vpn" >&2; exit 2 ;;
 esac
-
+test -f "$identity" -a ! -L "$identity"
+test -f "$backup.sha256"
+command -v age >/dev/null
 command -v sqlite3 >/dev/null
-command -v flock >/dev/null
+(
+  cd "$(dirname "$backup")"
+  sha256sum --check "$(basename "$backup").sha256"
+)
+
 install -d -m 0755 -o root -g root /run/lock
 exec 9>/run/lock/my-vpn-backup.lock
 flock -w 30 9
-
+work="$(mktemp -d /var/lib/my-vpn/.restore.XXXXXX)"
+plain_archive="$work/backup.tar"
+payload="$work/payload"
+rescue="$work/rescue"
+mkdir -m 0700 "$payload" "$rescue"
+trap 'rm -rf "$work"' EXIT
+age --decrypt --identity "$identity" --output "$plain_archive" "$backup"
+tar -xf "$plain_archive" -C "$payload" --no-same-owner --no-same-permissions
 (
-  cd "$backup_dir"
+  cd "$payload"
   sha256sum --check SHA256SUMS
 )
-sqlite3 "$backup_dir/my-vpn.db" 'PRAGMA integrity_check;' | grep -Fxq ok
+sqlite3 "$payload/my-vpn.db" 'PRAGMA integrity_check;' | grep -Fxq ok
+jq -e '([.inbounds[] | select(.tag == "my-vpn-reality")] | length) == 1' "$payload/xray-config.json" >/dev/null
+xray run -test -config "$payload/xray-config.json" >/dev/null
 
-state_dir=/var/lib/my-vpn
-config_dir=/etc/my-vpn
-db="$state_dir/my-vpn.db"
-config="$config_dir/my-vpn.env"
-test -f "$db"
-test -f "$config"
-rescue="$(mktemp -d /var/backups/my-vpn/.pre-restore.XXXXXX)"
+db=/var/lib/my-vpn/my-vpn.db
+config=/etc/my-vpn/my-vpn.env
+xray_config=/etc/xray/config.json
+xray_client_env=/etc/my-vpn/xray-client.env
+for path in "$db" "$config" "$xray_config" "$xray_client_env"; do test -f "$path"; done
 service_stopped=false
 restart_on_error() {
-  local status=$?
+  status=$?
   trap - EXIT
   if [[ "$status" -ne 0 && "$service_stopped" == true ]]; then
-    systemctl start my-vpn.service || true
+    systemctl start xray.service my-vpn.service || true
   fi
+  rm -rf "$work"
   exit "$status"
 }
 trap restart_on_error EXIT
 
-# Stop the sole writer before taking the rescue snapshot. sqlite3 .backup folds any
-# remaining WAL state into a self-contained database, unlike copying the main file.
-systemctl stop my-vpn.service
+systemctl stop my-vpn.service xray.service
 service_stopped=true
 sqlite3 "$db" ".timeout 10000" ".backup '$rescue/my-vpn.db'"
-sqlite3 "$rescue/my-vpn.db" 'PRAGMA integrity_check;' | grep -Fxq ok
-install -m 0600 -o root -g my-vpn "$config" "$rescue/my-vpn.env"
-chmod 0600 "$rescue/my-vpn.db"
+install -m 0600 -o root -g root "$config" "$rescue/my-vpn.env"
+install -m 0600 -o root -g root "$xray_config" "$rescue/xray-config.json"
+install -m 0600 -o root -g root "$xray_client_env" "$rescue/xray-client.env"
 
-# Never attach a WAL from a different database generation to the restored file.
 rm -f "$db-wal" "$db-shm"
-install -m 0600 -o my-vpn -g my-vpn "$backup_dir/my-vpn.db" "$db"
-install -m 0600 -o root -g my-vpn "$backup_dir/my-vpn.env" "$config"
-systemctl start my-vpn.service
+install -m 0600 -o my-vpn -g my-vpn "$payload/my-vpn.db" "$db"
+install -m 0640 -o root -g my-vpn "$payload/my-vpn.env" "$config"
+install -m 0640 -o xray -g xray "$payload/xray-config.json" "$xray_config"
+install -m 0640 -o root -g my-vpn "$payload/xray-client.env" "$xray_client_env"
+systemctl start xray.service my-vpn.service
 service_stopped=false
 
+healthy=false
 for _ in {1..20}; do
-  if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
-    trap - EXIT
-    echo "restored backup: $backup_dir (rescue snapshot: $rescue)"
-    exit 0
+  if systemctl is-active --quiet xray.service && \
+     curl --fail --silent --show-error --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
+    healthy=true
+    break
   fi
   sleep 1
 done
+if [[ "$healthy" == true ]]; then
+  trap - EXIT
+  rm -rf "$work"
+  echo "restored encrypted backup: $backup"
+  exit 0
+fi
 
 echo "restored backup failed health check; restoring pre-restore state" >&2
-systemctl stop my-vpn.service
+systemctl stop my-vpn.service xray.service
 service_stopped=true
 rm -f "$db-wal" "$db-shm"
 install -m 0600 -o my-vpn -g my-vpn "$rescue/my-vpn.db" "$db"
-install -m 0600 -o root -g my-vpn "$rescue/my-vpn.env" "$config"
-systemctl start my-vpn.service
+install -m 0640 -o root -g my-vpn "$rescue/my-vpn.env" "$config"
+install -m 0640 -o xray -g xray "$rescue/xray-config.json" "$xray_config"
+install -m 0640 -o root -g my-vpn "$rescue/xray-client.env" "$xray_client_env"
+systemctl start xray.service my-vpn.service
 service_stopped=false
 trap - EXIT
+rm -rf "$work"
 exit 1

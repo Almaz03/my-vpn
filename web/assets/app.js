@@ -32,8 +32,10 @@
   const importHint = document.querySelector('#import-hint');
   const importButton = document.querySelector('#import-button');
   const downloadLink = document.querySelector('#download-link');
+  const copyLinkButton = document.querySelector('#copy-link-button');
   const qrStep = document.querySelector('#qr-step');
   const qrImage = document.querySelector('#qr-image');
+  const routingNote = document.querySelector('#routing-note');
 
   let platform = detectPlatform();
   let deepLink = '';
@@ -63,6 +65,16 @@
   importButton.addEventListener('click', () => {
     if (!deepLink) return;
     window.location.assign(deepLink);
+  });
+
+  copyLinkButton.addEventListener('click', async () => {
+    if (!deepLink || !navigator.clipboard || !window.isSecureContext) return;
+    try {
+      await navigator.clipboard.writeText(deepLink);
+      copyLinkButton.textContent = 'Ссылка скопирована';
+    } catch {
+      copyLinkButton.textContent = 'Не удалось скопировать';
+    }
   });
 
   form.addEventListener('submit', async (event) => {
@@ -198,11 +210,13 @@
       : 'Кнопка импорта появится после безопасного создания отдельного профиля для устройства.';
 
     importButton.hidden = !deepLink;
+    copyLinkButton.hidden = !deepLink || !navigator.clipboard || !window.isSecureContext;
     downloadLink.hidden = !downloadUrl;
     if (downloadUrl) downloadLink.href = downloadUrl;
 
     qrStep.hidden = !qrUrl;
     if (qrUrl) qrImage.src = qrUrl;
+    routingNote.hidden = data.routing_mode !== 'ru-direct';
 
     activationPanel.hidden = true;
     resultPanel.hidden = false;

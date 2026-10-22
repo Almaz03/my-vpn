@@ -13,16 +13,17 @@ import (
 )
 
 type Config struct {
-	ListenAddr       string
-	DatabasePath     string
-	InviteHMACKey    []byte
-	AdminAPIToken    string
-	PublicBaseURL    *url.URL
-	WebRoot          string
-	ProvisionerMode  string
-	TelegramBotToken string
-	TelegramAdmins   []int64
-	InviteTTL        time.Duration
+	ListenAddr         string
+	DatabasePath       string
+	InviteHMACKey      []byte
+	AdminAPIToken      string
+	PublicBaseURL      *url.URL
+	WebRoot            string
+	ProvisionerMode    string
+	TelegramBotToken   string
+	TelegramAdmins     []int64
+	TelegramOffsetPath string
+	InviteTTL          time.Duration
 }
 
 func Load() (Config, error) {
@@ -39,8 +40,8 @@ func Load() (Config, error) {
 		return Config{}, errors.New("PUBLIC_BASE_URL must be an absolute https URL without user info")
 	}
 	mode := envOr("PROVISIONER_MODE", "noop")
-	if mode != "noop" {
-		return Config{}, fmt.Errorf("unsupported PROVISIONER_MODE %q; only safe noop mode is available", mode)
+	if mode != "noop" && mode != "vless-reality" {
+		return Config{}, fmt.Errorf("unsupported PROVISIONER_MODE %q", mode)
 	}
 	admins, err := parseAdmins(os.Getenv("TELEGRAM_ADMIN_IDS"))
 	if err != nil {
@@ -51,16 +52,17 @@ func Load() (Config, error) {
 		return Config{}, errors.New("TELEGRAM_ADMIN_IDS is required when TELEGRAM_BOT_TOKEN is set")
 	}
 	return Config{
-		ListenAddr:       envOr("APP_LISTEN", "127.0.0.1:8080"),
-		DatabasePath:     envOr("APP_DB_PATH", "./data/my-vpn.db"),
-		InviteHMACKey:    key,
-		AdminAPIToken:    adminToken,
-		PublicBaseURL:    base,
-		WebRoot:          envOr("WEB_ROOT", "./web"),
-		ProvisionerMode:  mode,
-		TelegramBotToken: botToken,
-		TelegramAdmins:   admins,
-		InviteTTL:        10 * time.Minute,
+		ListenAddr:         envOr("APP_LISTEN", "127.0.0.1:8080"),
+		DatabasePath:       envOr("APP_DB_PATH", "./data/my-vpn.db"),
+		InviteHMACKey:      key,
+		AdminAPIToken:      adminToken,
+		PublicBaseURL:      base,
+		WebRoot:            envOr("WEB_ROOT", "./web"),
+		ProvisionerMode:    mode,
+		TelegramBotToken:   botToken,
+		TelegramAdmins:     admins,
+		TelegramOffsetPath: envOr("TELEGRAM_OFFSET_PATH", "/var/lib/my-vpn/telegram-offset"),
+		InviteTTL:          10 * time.Minute,
 	}, nil
 }
 

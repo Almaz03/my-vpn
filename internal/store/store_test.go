@@ -139,3 +139,63 @@ func TestRevokePendingDoesNotSetRevokedAtAndCanRetry(t *testing.T) {
 		t.Fatalf("idempotent=%#v complete=%v err=%v", idempotent, complete, err)
 	}
 }
+
+func TestSubscriptionExpiresAndDeviceRevokeInvalidatesToken(t *testing.T) {
+	database := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	database.now = func() time.Time { return now }
+	inviteHash := bytes.Repeat([]byte{7}, 32)
+	if _, err := database.CreateInvitation(context.Background(), inviteHash, "Семья", "Телефон", now.Add(time.Hour), 5); err != nil {
+		t.Fatal(err)
+	}
+	device, err := database.ConsumeInvitation(context.Background(), inviteHash, "android", "", "ip-hmac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateProvisioned(context.Background(), device.ID, "vless-reality:"+device.ID, "active"); err != nil {
+		t.Fatal(err)
+	}
+	tokenHash := bytes.Repeat([]byte{8}, 32)
+	if err := database.IssueSubscription(context.Background(), tokenHash, device.ID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ResolveSubscription(context.Background(), tokenHash); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(61 * time.Second)
+	if _, err := database.ResolveSubscription(context.Background(), tokenHash); !errors.Is(err, ErrSubscriptionNotFound) {
+		t.Fatalf("expired subscription error=%v", err)
+	}
+
+	newHash := bytes.Repeat([]byte{9}, 32)
+	if err := database.IssueSubscription(context.Background(), newHash, device.ID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := database.BeginDeviceRevoke(context.Background(), device.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ResolveSubscription(context.Background(), newHash); !errors.Is(err, ErrSubscriptionNotFound) {
+		t.Fatalf("revoke-pending subscription error=%v", err)
+	}
+}
+
+func TestInvitationCanBeExtendedButNotAfterUse(t *testing.T) {
+	database := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	database.now = func() time.Time { return now }
+	hash := bytes.Repeat([]byte{10}, 32)
+	invitation, err := database.CreateInvitation(context.Background(), hash, "Семья", "Планшет", now.Add(time.Minute), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extended, err := database.ExtendInvitation(context.Background(), invitation.ID, now.Add(30*time.Minute))
+	if err != nil || !extended.ExpiresAt.Equal(now.Add(30*time.Minute)) {
+		t.Fatalf("extended=%#v err=%v", extended, err)
+	}
+	if _, err := database.ConsumeInvitation(context.Background(), hash, "ipad", "", "ip-hmac"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExtendInvitation(context.Background(), invitation.ID, now.Add(40*time.Minute)); !errors.Is(err, ErrInvalidInvitation) {
+		t.Fatalf("extension after use error=%v", err)
+	}
+}

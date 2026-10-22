@@ -27,6 +27,7 @@ var (
 	ErrTooManyAttempts         = errors.New("invitation attempt limit reached")
 	ErrDeviceNotFound          = errors.New("device not found")
 	ErrInvitationCreationLimit = errors.New("invitation creation limit reached")
+	ErrSubscriptionNotFound    = errors.New("subscription is invalid or expired")
 )
 
 type Store struct {
@@ -35,11 +36,13 @@ type Store struct {
 }
 
 type Invitation struct {
-	ID           string    `json:"id"`
-	RelativeName string    `json:"relative_name"`
-	DeviceName   string    `json:"device_name"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string     `json:"id"`
+	RelativeName string     `json:"relative_name"`
+	DeviceName   string     `json:"device_name"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UsedAt       *time.Time `json:"used_at,omitempty"`
+	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 }
 
 type Device struct {
@@ -52,6 +55,19 @@ type Device struct {
 	State         string     `json:"state"`
 	CreatedAt     time.Time  `json:"created_at"`
 	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+}
+
+type Subscription struct {
+	DeviceID      string
+	CredentialRef string
+	ExpiresAt     time.Time
+}
+
+type Stats struct {
+	InvitationsOpen int `json:"invitations_open"`
+	DevicesActive   int `json:"devices_active"`
+	DevicesPending  int `json:"devices_pending"`
+	DevicesRevoked  int `json:"devices_revoked"`
 }
 
 func Open(path string) (*Store, error) {
@@ -152,6 +168,58 @@ func (s *Store) RevokeInvitation(ctx context.Context, id string) error {
 		return fmt.Errorf("audit invitation revoke: %w", err)
 	}
 	return tx.Commit()
+}
+
+func (s *Store) ExtendInvitation(ctx context.Context, id string, expiresAt time.Time) (Invitation, error) {
+	now := s.now().UTC().Truncate(time.Second)
+	expiresAt = expiresAt.UTC().Truncate(time.Second)
+	if !expiresAt.After(now) || expiresAt.After(now.Add(time.Hour)) {
+		return Invitation{}, errors.New("expiry must be within the next hour")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Invitation{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE invitations SET expires_at = ?
+		WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`, expiresAt.Unix(), id)
+	if err != nil {
+		return Invitation{}, fmt.Errorf("extend invitation: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows != 1 {
+		return Invitation{}, ErrInvalidInvitation
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, detail, created_at)
+		VALUES('invitation.extended', ?, '', ?)`, id, now.Unix()); err != nil {
+		return Invitation{}, fmt.Errorf("audit invitation extension: %w", err)
+	}
+	invitation, err := queryInvitation(ctx, tx, id)
+	if err != nil {
+		return Invitation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Invitation{}, err
+	}
+	return invitation, nil
+}
+
+func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, relative_name, device_name, expires_at, created_at, used_at, revoked_at
+		FROM invitations ORDER BY created_at DESC LIMIT 100`)
+	if err != nil {
+		return nil, fmt.Errorf("list invitations: %w", err)
+	}
+	defer rows.Close()
+	var invitations []Invitation
+	for rows.Next() {
+		invitation, err := scanInvitation(rows)
+		if err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, invitation)
+	}
+	return invitations, rows.Err()
 }
 
 func (s *Store) ConsumeInvitation(ctx context.Context, hash []byte, platform, requestedDeviceName, remoteIPHash string) (Device, error) {
@@ -368,6 +436,109 @@ func (s *Store) UpdateProvisioned(ctx context.Context, id, credentialRef, state 
 	return nil
 }
 
+func (s *Store) IssueSubscription(ctx context.Context, tokenHMAC []byte, deviceID string, expiresAt time.Time) error {
+	if len(tokenHMAC) != 32 {
+		return errors.New("invalid subscription token HMAC")
+	}
+	now := s.now().UTC().Truncate(time.Second)
+	expiresAt = expiresAt.UTC().Truncate(time.Second)
+	if !expiresAt.After(now) {
+		return errors.New("subscription already expired")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var state string
+	if err := tx.QueryRowContext(ctx, `SELECT state FROM devices WHERE id = ?`, deviceID).Scan(&state); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrDeviceNotFound
+		}
+		return err
+	}
+	if state != "pending" && state != "active" {
+		return errors.New("device cannot receive a subscription")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE subscription_tokens SET revoked_at = ?
+		WHERE device_id = ? AND revoked_at IS NULL`, now.Unix(), deviceID); err != nil {
+		return fmt.Errorf("revoke previous subscription: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO subscription_tokens
+		(token_hmac, device_id, expires_at, created_at) VALUES(?, ?, ?, ?)`,
+		tokenHMAC, deviceID, expiresAt.Unix(), now.Unix()); err != nil {
+		return fmt.Errorf("insert subscription token: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, detail, created_at)
+		VALUES('subscription.issued', ?, '', ?)`, deviceID, now.Unix()); err != nil {
+		return fmt.Errorf("audit subscription issue: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ResolveSubscription(ctx context.Context, tokenHMAC []byte) (Subscription, error) {
+	if len(tokenHMAC) != 32 {
+		return Subscription{}, ErrSubscriptionNotFound
+	}
+	now := s.now().UTC().Truncate(time.Second)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Subscription{}, err
+	}
+	defer tx.Rollback()
+	var subscription Subscription
+	var expiresAt int64
+	err = tx.QueryRowContext(ctx, `SELECT t.device_id, d.credential_ref, t.expires_at
+		FROM subscription_tokens t JOIN devices d ON d.id = t.device_id
+		WHERE t.token_hmac = ? AND t.revoked_at IS NULL AND t.expires_at > ?
+		AND d.state = 'active' AND d.revoked_at IS NULL`, tokenHMAC, now.Unix()).
+		Scan(&subscription.DeviceID, &subscription.CredentialRef, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Subscription{}, ErrSubscriptionNotFound
+	}
+	if err != nil {
+		return Subscription{}, fmt.Errorf("resolve subscription: %w", err)
+	}
+	subscription.ExpiresAt = time.Unix(expiresAt, 0).UTC()
+	if _, err := tx.ExecContext(ctx, `UPDATE subscription_tokens SET last_used_at = ? WHERE token_hmac = ?`, now.Unix(), tokenHMAC); err != nil {
+		return Subscription{}, fmt.Errorf("touch subscription: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Subscription{}, err
+	}
+	return subscription, nil
+}
+
+func (s *Store) Stats(ctx context.Context) (Stats, error) {
+	var stats Stats
+	now := s.now().UTC().Unix()
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM invitations
+		WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`, now).Scan(&stats.InvitationsOpen); err != nil {
+		return Stats{}, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT state, COUNT(*) FROM devices GROUP BY state`)
+	if err != nil {
+		return Stats{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state string
+		var count int
+		if err := rows.Scan(&state, &count); err != nil {
+			return Stats{}, err
+		}
+		switch state {
+		case "active":
+			stats.DevicesActive = count
+		case "pending", "revoke_pending":
+			stats.DevicesPending += count
+		case "revoked":
+			stats.DevicesRevoked = count
+		}
+	}
+	return stats, rows.Err()
+}
+
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, invitation_id, relative_name, device_name, platform, credential_ref, state, created_at, revoked_at
         FROM devices ORDER BY created_at DESC`)
@@ -446,6 +617,10 @@ func (s *Store) CompleteDeviceRevoke(ctx context.Context, id string) (Device, er
 	if _, err := tx.ExecContext(ctx, `UPDATE devices SET state = 'revoked', revoked_at = ? WHERE id = ?`, now.Unix(), id); err != nil {
 		return Device{}, fmt.Errorf("complete device revoke: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE subscription_tokens SET revoked_at = ?
+		WHERE device_id = ? AND revoked_at IS NULL`, now.Unix(), id); err != nil {
+		return Device{}, fmt.Errorf("revoke device subscriptions: %w", err)
+	}
 	device.RevokedAt = &now
 	device.State = "revoked"
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, detail, created_at)
@@ -460,6 +635,36 @@ func (s *Store) CompleteDeviceRevoke(ctx context.Context, id string) (Device, er
 
 type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type invitationScanner interface {
+	Scan(...any) error
+}
+
+func scanInvitation(row invitationScanner) (Invitation, error) {
+	var invitation Invitation
+	var expires, created int64
+	var used, revoked sql.NullInt64
+	if err := row.Scan(&invitation.ID, &invitation.RelativeName, &invitation.DeviceName,
+		&expires, &created, &used, &revoked); err != nil {
+		return Invitation{}, fmt.Errorf("scan invitation: %w", err)
+	}
+	invitation.ExpiresAt = time.Unix(expires, 0).UTC()
+	invitation.CreatedAt = time.Unix(created, 0).UTC()
+	if used.Valid {
+		value := time.Unix(used.Int64, 0).UTC()
+		invitation.UsedAt = &value
+	}
+	if revoked.Valid {
+		value := time.Unix(revoked.Int64, 0).UTC()
+		invitation.RevokedAt = &value
+	}
+	return invitation, nil
+}
+
+func queryInvitation(ctx context.Context, query queryRower, id string) (Invitation, error) {
+	return scanInvitation(query.QueryRowContext(ctx, `SELECT id, relative_name, device_name, expires_at, created_at, used_at, revoked_at
+		FROM invitations WHERE id = ?`, id))
 }
 
 func queryDevice(ctx context.Context, query queryRower, id string) (Device, error) {

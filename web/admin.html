@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'">
+    <title>Семейный VPN — управление</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/admin.js" defer></script>
+  </head>
+  <body>
+    <main class="shell admin-shell">
+      <header class="brand" aria-label="Семейный VPN">
+        <span class="brand__mark" aria-hidden="true">A</span>
+        <span>Семейный VPN</span>
+        <span class="privacy-pill">Администратор</span>
+      </header>
+
+      <section class="card" id="login-panel" aria-labelledby="login-title">
+        <div class="eyebrow">Закрытый раздел</div>
+        <h1 id="login-title">Вход в управление</h1>
+        <p class="lead">Введите административный токен. Он хранится только в памяти этой вкладки и будет удалён при выходе или закрытии страницы.</p>
+        <form class="admin-form" id="login-form">
+          <label>Административный токен
+            <input id="admin-token" type="password" autocomplete="off" minlength="24" required>
+          </label>
+          <button class="primary" type="submit">Войти</button>
+        </form>
+        <div id="login-status" class="status" role="status" aria-live="polite" hidden></div>
+      </section>
+
+      <div id="admin-panel" hidden>
+        <div class="admin-bar">
+          <h1>Управление</h1>
+          <button class="link-button" id="refresh-button" type="button">Обновить</button>
+          <button class="link-button" id="logout-button" type="button">Выйти</button>
+        </div>
+
+        <div class="admin-grid">
+          <section class="card" aria-labelledby="invite-title">
+            <div class="eyebrow">Одноразовый доступ</div>
+            <h2 id="invite-title">Создать приглашение</h2>
+            <form class="admin-form" id="invite-form">
+              <label>Имя родственника
+                <input id="relative-name" type="text" maxlength="80" autocomplete="off" required>
+              </label>
+              <label>Устройство
+                <input id="device-name" type="text" maxlength="80" autocomplete="off" placeholder="Например, iPhone" required>
+              </label>
+              <label>Срок действия
+                <select id="invite-ttl">
+                  <option value="600" selected>10 минут</option>
+                  <option value="1800">30 минут</option>
+                  <option value="3600">1 час</option>
+                </select>
+              </label>
+              <button class="primary" type="submit">Создать код</button>
+            </form>
+            <div class="secret-result" id="invite-result" hidden>
+              <strong>Покажите код родственнику один раз</strong>
+              <span class="secret-code" id="invite-code-result"></span>
+              <div class="admin-actions">
+                <button class="secondary" id="copy-code-button" type="button">Скопировать код</button>
+                <button class="danger-button" id="revoke-invite-button" type="button">Отозвать</button>
+              </div>
+              <p class="hint" id="invite-expiry"></p>
+            </div>
+            <div id="invite-status" class="status" role="status" aria-live="polite" hidden></div>
+          </section>
+
+          <section class="card" aria-labelledby="devices-title">
+            <div class="eyebrow">Отдельный доступ на устройство</div>
+            <h2 id="devices-title">Устройства</h2>
+            <p class="hint">Отзыв одного устройства не влияет на остальные.</p>
+            <div id="devices-status" class="status" role="status" aria-live="polite" hidden></div>
+            <div class="device-list" id="device-list"></div>
+          </section>
+
+          <section class="card" aria-labelledby="service-title">
+            <div class="eyebrow">Наблюдение</div>
+            <h2 id="service-title">Состояние сервиса</h2>
+            <div id="service-status" class="status" role="status" aria-live="polite" hidden></div>
+            <div class="status-grid" id="status-grid"></div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

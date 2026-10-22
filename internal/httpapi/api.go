@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Almaz03/my-vpn/internal/service"
 	"github.com/Almaz03/my-vpn/internal/store"
+	"rsc.io/qr"
 )
 
 type API struct {
@@ -25,12 +27,13 @@ type API struct {
 	adminHash [sha256.Size]byte
 	inviteTTL time.Duration
 	webRoot   string
+	startedAt time.Time
 }
 
 func New(service *service.Service, database *store.Store, adminToken, webRoot string, inviteTTL time.Duration) *API {
 	return &API{
 		service: service, store: database, adminHash: sha256.Sum256([]byte(adminToken)),
-		inviteTTL: inviteTTL, webRoot: webRoot,
+		inviteTTL: inviteTTL, webRoot: webRoot, startedAt: time.Now(),
 	}
 }
 
@@ -38,12 +41,70 @@ func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("POST /api/v1/activate", a.activate)
+	mux.HandleFunc("GET /s/{token}", a.subscription)
+	mux.HandleFunc("GET /s/{token}/qr", a.subscriptionQR)
+	mux.HandleFunc("GET /routing/family-ru-direct.json", a.routingProfile)
 	mux.HandleFunc("POST /api/v1/admin/invitations", a.requireAdmin(a.createInvitation))
+	mux.HandleFunc("GET /api/v1/admin/invitations", a.requireAdmin(a.listInvitations))
 	mux.HandleFunc("POST /api/v1/admin/invitations/{id}/revoke", a.requireAdmin(a.revokeInvitation))
+	mux.HandleFunc("POST /api/v1/admin/invitations/{id}/extend", a.requireAdmin(a.extendInvitation))
 	mux.HandleFunc("GET /api/v1/admin/devices", a.requireAdmin(a.listDevices))
 	mux.HandleFunc("POST /api/v1/admin/devices/{id}/revoke", a.requireAdmin(a.revokeDevice))
+	mux.HandleFunc("GET /api/v1/admin/status", a.requireAdmin(a.status))
 	mux.Handle("/", a.staticHandler())
 	return securityHeaders(mux)
+}
+
+func (a *API) subscriptionQR(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if _, err := a.service.Subscription(r.Context(), token); err != nil {
+		if errors.Is(err, store.ErrSubscriptionNotFound) {
+			writeError(w, http.StatusNotFound, "subscription not found or expired")
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "subscription temporarily unavailable")
+		return
+	}
+	code, err := qr.Encode(a.service.SubscriptionDeepLink(token), qr.M)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not encode QR")
+		return
+	}
+	code.Scale = 6
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store, private, max-age=0")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(code.PNG())
+}
+
+func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
+	payload, err := a.service.Subscription(r.Context(), r.PathValue("token"))
+	if errors.Is(err, store.ErrSubscriptionNotFound) {
+		writeError(w, http.StatusNotFound, "subscription not found or expired")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "subscription temporarily unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, private, max-age=0")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Profile-Title", "base64:RmFtaWx5IFZQTg==")
+	w.Header().Set("Profile-Update-Interval", "0")
+	w.Header().Set("Routing-Geo-Update-Interval", "24")
+	w.Header().Set("Autorouting", "incy://autorouting/onadd/"+a.service.RoutingProfileURL())
+	w.Header().Set("Hide-Url", "1")
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", `attachment; filename="family-vpn.txt"`)
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, payload.Body)
+}
+
+func (a *API) routingProfile(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	writeJSON(w, http.StatusOK, a.service.RoutingProfile())
 }
 
 func (a *API) revokeInvitation(w http.ResponseWriter, r *http.Request) {
@@ -98,11 +159,13 @@ func (a *API) activate(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.service.ActivationSuccess(r.Context(), ip)
 	writeJSON(w, http.StatusCreated, map[string]any{
+		"device_id":           activation.Device.ID,
 		"device_name":         activation.Device.DeviceName,
 		"state":               activation.Device.State,
 		"incy_deep_link":      activation.INCYDeepLink,
 		"config_download_url": activation.ConfigDownloadURL,
 		"qr_code_url":         activation.QRCodeURL,
+		"routing_mode":        "ru-direct",
 		"message":             activation.Message,
 	})
 }
@@ -134,6 +197,31 @@ func (a *API) createInvitation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"invitation": invitation, "code": code})
 }
 
+func (a *API) listInvitations(w http.ResponseWriter, r *http.Request) {
+	invitations, err := a.service.ListInvitations(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list invitations")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invitations": invitations})
+}
+
+func (a *API) extendInvitation(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		TTLSeconds int `json:"ttl_seconds"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	invitation, err := a.service.ExtendInvitation(r.Context(), r.PathValue("id"), time.Duration(input.TTLSeconds)*time.Second)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "invitation not found or no longer extendable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invitation": invitation})
+}
+
 func (a *API) listDevices(w http.ResponseWriter, r *http.Request) {
 	devices, err := a.service.ListDevices(r.Context())
 	if err != nil {
@@ -158,6 +246,21 @@ func (a *API) revokeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"device": device})
+}
+
+func (a *API) status(w http.ResponseWriter, r *http.Request) {
+	stats, err := a.service.Stats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "status unavailable")
+		return
+	}
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok", "uptime_seconds": int64(time.Since(a.startedAt).Seconds()),
+		"go_version": runtime.Version(), "goroutines": runtime.NumGoroutine(),
+		"memory_alloc_bytes": memory.Alloc, "database": "ok", "counts": stats,
+	})
 }
 
 func (a *API) requireAdmin(next http.HandlerFunc) http.HandlerFunc {

@@ -8,6 +8,7 @@ Type=simple
 User=my-vpn
 Group=my-vpn
 EnvironmentFile=/etc/my-vpn/my-vpn.env
+EnvironmentFile=/etc/my-vpn/xray-client.env
 ExecStart=/opt/my-vpn/current/my-vpn
 WorkingDirectory=/opt/my-vpn/current
 Restart=on-failure

@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE INDEX IF NOT EXISTS devices_created_at_idx ON devices(created_at DESC);
 CREATE INDEX IF NOT EXISTS invitations_expires_at_idx ON invitations(expires_at);
 
+-- The bearer token itself is never stored. token_hmac is an HMAC-SHA256 made
+-- with the same server-side pepper as invitation codes.
+CREATE TABLE IF NOT EXISTS subscription_tokens (
+    token_hmac BLOB PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS subscription_tokens_device_idx ON subscription_tokens(device_id);
+CREATE INDEX IF NOT EXISTS subscription_tokens_expires_idx ON subscription_tokens(expires_at);
+
 CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type TEXT NOT NULL,

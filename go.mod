@@ -2,7 +2,10 @@ module github.com/Almaz03/my-vpn
 
 go 1.27
 
-require modernc.org/sqlite v1.40.1
+require (
+	modernc.org/sqlite v1.40.1
+	rsc.io/qr v0.2.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
