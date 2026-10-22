@@ -65,8 +65,10 @@
         <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 
         <div class="alternative-access">
-          <span>Нет кода?</span>
-          <button class="link-button" type="button" id="show-request-form" aria-expanded="false" aria-controls="access-request-panel">Запросить доступ</button>
+          <button class="request-access-button" type="button" id="show-request-form" aria-expanded="false" aria-controls="access-request-panel">
+            <span class="request-access-button__title">Запросить доступ</span>
+            <span class="request-access-button__hint">Нет кода? Отправьте запрос администратору</span>
+          </button>
         </div>
 
         <section id="access-request-panel" class="request-panel" aria-labelledby="request-title" hidden>
