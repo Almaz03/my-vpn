@@ -9,6 +9,7 @@ if [[ $# -ne 1 || ! "$1" =~ ^(provision|revoke|config)$ ]]; then
 fi
 
 action="$1"
+trap 'status=$?; echo "reality helper failed action=$action line=$LINENO status=$status" >&2; exit "$status"' ERR
 xray_config=/etc/xray/config.json
 client_env=/etc/my-vpn/xray-client.env
 lock=/run/lock/my-vpn-xray.lock
