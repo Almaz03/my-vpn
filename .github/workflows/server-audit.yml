@@ -9,7 +9,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Configure SSH credentials
         shell: bash
@@ -60,14 +60,41 @@ jobs:
           nproc
           free -h
           df -hT /
+          printf 'load averages: '
+          cat /proc/loadavg
+          printf 'boot time: '
+          uptime -s
+          printf 'open file limit: '
+          sh -c 'ulimit -n'
 
           echo '== network addresses and listeners =='
           ip -brief address
           ss -lntup
+          echo '-- routes (no packet or configuration changes) --'
+          ip route show
+          echo '-- interface counters --'
+          awk 'NR > 2 {gsub(":", "", $1); print $1, "rx_bytes=" $2, "tx_bytes=" $10}' /proc/net/dev
+          echo '-- interface link speeds when exposed by the kernel --'
+          for speed_file in /sys/class/net/*/speed; do
+            if [[ -r "$speed_file" ]]; then
+              printf '%s speed_mbps=' "$(basename "$(dirname "$speed_file")")"
+              cat "$speed_file" 2>/dev/null || echo unknown
+            fi
+          done
+          echo '-- queue disciplines --'
+          tc qdisc show 2>/dev/null || true
 
           echo '== firewall summary =='
-          if command -v ufw >/dev/null 2>&1; then ufw status; else echo 'ufw: not installed'; fi
-          if command -v nft >/dev/null 2>&1; then nft list tables; else echo 'nft: not installed'; fi
+          if command -v ufw >/dev/null 2>&1; then
+            sudo -n ufw status verbose
+          else
+            echo 'ufw: not installed'
+          fi
+          if command -v nft >/dev/null 2>&1; then
+            sudo -n nft list ruleset
+          else
+            echo 'nft: not installed'
+          fi
 
           echo '== runtime availability =='
           command -v docker || true
@@ -79,6 +106,14 @@ jobs:
             | awk '{print $1, $3, $4}' \
             | grep -Ei 'amnezia|awg|wireguard|wg-|xray|caddy|nginx|apache|docker|containerd|ssh' || true
 
+          echo '== relevant service states and resource accounting =='
+          for unit in ssh.service docker.service containerd.service caddy.service xray.service my-vpn.service tailscaled.service; do
+            if systemctl cat "$unit" >/dev/null 2>&1; then
+              systemctl show "$unit" --no-pager \
+                --property=Id,LoadState,ActiveState,SubState,MainPID,MemoryCurrent,CPUUsageNSec,TasksCurrent,RestartUSec
+            fi
+          done
+
           echo '== relevant installed unit files =='
           systemctl list-unit-files --type=service --no-legend --no-pager \
             | awk '{print $1, $2}' \
@@ -88,7 +123,88 @@ jobs:
           if command -v docker >/dev/null 2>&1; then
             docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
           fi
+
+          echo '== aggregate AmneziaWG peer activity (no keys, endpoints, or config) =='
+          if command -v docker >/dev/null 2>&1 && docker inspect amnezia-awg2 >/dev/null 2>&1; then
+            docker exec amnezia-awg2 sh -c '
+              if command -v awg >/dev/null 2>&1; then tool=awg
+              elif command -v wg >/dev/null 2>&1; then tool=wg
+              else echo "wireguard inspection tool unavailable"; exit 0
+              fi
+              now=$(date +%s)
+              for iface in $($tool show interfaces 2>/dev/null); do
+                printf "%s " "$iface"
+                $tool show "$iface" dump 2>/dev/null | awk -v now="$now" '\''
+                  NR > 1 {
+                    peers++
+                    if ($5 > 0) seen++
+                    if ($5 > 0 && now - $5 <= 300) active5++
+                    if ($5 > 0 && now - $5 <= 86400) active24h++
+                    rx += $6
+                    tx += $7
+                  }
+                  END {
+                    printf "peers=%d ever_seen=%d active_5m=%d active_24h=%d rx_bytes=%.0f tx_bytes=%.0f\n", peers, seen, active5, active24h, rx, tx
+                  }
+                '\''
+              done
+            '
+          else
+            echo 'amnezia-awg2 container: not present'
+          fi
+
+          echo '== SSH authorization layout (counts and modes only; no key material) =='
+          getent passwd | awk -F: '($3 == 0 || ($3 >= 1000 && $3 < 65534)) {print "account=" $1, "uid=" $3, "home=" $6, "shell=" $7}'
+          for home_dir in /root /home/*; do
+            [[ -d "$home_dir" ]] || continue
+            auth_file="$home_dir/.ssh/authorized_keys"
+            if sudo -n test -f "$auth_file"; then
+              mode_owner="$(sudo -n stat -c '%a %U:%G' "$auth_file")"
+              key_count="$(sudo -n awk 'NF && $1 !~ /^#/ {count++} END {print count + 0}' "$auth_file")"
+              printf '%s mode_owner=%s entries=%s\n' "$auth_file" "$mode_owner" "$key_count"
+            fi
+          done
+
+          echo '== reverse proxy and VPN binary presence =='
+          for binary in caddy xray sqlite3 openssl curl; do
+            if command -v "$binary" >/dev/null 2>&1; then
+              printf '%s: ' "$binary"
+              "$binary" version 2>/dev/null | head -n 1 || command -v "$binary"
+            else
+              echo "$binary: not installed"
+            fi
+          done
           REMOTE_AUDIT
+
+      - name: Check public DNS, TLS, and network registration
+        shell: bash
+        run: |
+          set -u
+          echo '== public DNS =='
+          mapfile -t addresses < <(dig +short vpn.akalmaz.tech A | sort -u)
+          if [[ ${#addresses[@]} -eq 0 ]]; then
+            echo 'vpn.akalmaz.tech has no A record'
+          else
+            printf 'vpn.akalmaz.tech A %s\n' "${addresses[@]}"
+          fi
+
+          echo '== HTTPS response and certificate metadata =='
+          curl --silent --show-error --head --max-time 10 https://vpn.akalmaz.tech/ || true
+          timeout 12 openssl s_client -connect vpn.akalmaz.tech:443 -servername vpn.akalmaz.tech </dev/null 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true
+
+          echo '== public registration summaries =='
+          for address in "${addresses[@]}"; do
+            [[ "$address" =~ ^[0-9.]+$ ]] || continue
+            echo "address=$address"
+            curl --fail --silent --show-error --max-time 10 \
+              "https://stat.ripe.net/data/prefix-overview/data.json?resource=$address" \
+              | jq -r '.data | "ripe_prefix=\(.prefix // "unknown") announced=\(.announced // false) asns=\((.asns // []) | join(",")) holder=\(.holder // "unknown")"' \
+              || echo 'RIPEstat lookup unavailable'
+            curl --fail --silent --show-error --max-time 10 "https://ipwho.is/$address" \
+              | jq -r 'if .success then "geo_country=\(.country // "unknown") country_code=\(.country_code // "unknown") region=\(.region // "unknown") city=\(.city // "unknown") isp=\(.connection.isp // "unknown") asn=\(.connection.asn // "unknown")" else "geolocation lookup unavailable" end' \
+              || echo 'ipwho.is lookup unavailable'
+          done
 
       - name: Remove temporary SSH material
         if: always()
