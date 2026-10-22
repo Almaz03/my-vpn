@@ -18,6 +18,19 @@ import (
 
 type apiRealityProvider struct{ credential string }
 
+type recordingNotifier struct {
+	id       string
+	name     string
+	device   string
+	platform string
+	err      error
+}
+
+func (n *recordingNotifier) NotifyAccessRequest(_ context.Context, id, name, device, platform string, _ time.Time) error {
+	n.id, n.name, n.device, n.platform = id, name, device, platform
+	return n.err
+}
+
 func (p *apiRealityProvider) Provision(_ context.Context, request provision.DeviceRequest) (provision.Result, error) {
 	p.credential = "vless-reality:" + request.DeviceID
 	return provision.Result{CredentialRef: p.credential, State: "active", INCYDeepLink: "incy://import/provider-secret"}, nil
@@ -164,7 +177,7 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/routing/family-ru-direct.json", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"GlobalProxy":"true"`) || !strings.Contains(response.Body.String(), "geosite:ru") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"GlobalProxy":"true"`) || !strings.Contains(response.Body.String(), "domain:ru") {
 		t.Fatalf("routing status=%d body=%s", response.Code, response.Body.String())
 	}
 }
@@ -204,5 +217,90 @@ func TestAdminStatusAndInvitationLifecycle(t *testing.T) {
 	status := admin(http.MethodGet, "/api/v1/admin/status", "")
 	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"database":"ok"`) {
 		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
+	}
+}
+
+func TestPublicAccessRequestApprovalAndCopyableCode(t *testing.T) {
+	database, err := store.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	base, _ := url.Parse("https://vpn.example.test")
+	application := service.New(database, provision.Noop{}, bytes.Repeat([]byte{9}, 32), base)
+	api := New(application, database, "this-is-a-long-admin-token", t.TempDir(), 10*time.Minute)
+	notifier := &recordingNotifier{}
+	api.SetAccessRequestNotifier(notifier)
+	handler := api.Handler()
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/access-requests",
+		strings.NewReader(`{"relative_name":"Мама","device_name":"iPhone","platform":"ios"}`))
+	create.Header.Set("Content-Type", "application/json")
+	create.RemoteAddr = "192.0.2.90:1234"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, create)
+	var created struct {
+		Token string `json:"request_token"`
+	}
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &created) != nil || created.Token == "" {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	if notifier.id == "" || notifier.name != "Мама" || notifier.device != "iPhone" || notifier.platform != "ios" {
+		t.Fatalf("notification=%#v", notifier)
+	}
+	repeat := httptest.NewRequest(http.MethodPost, "/api/v1/access-requests",
+		strings.NewReader(`{"relative_name":"мама","device_name":"iPhone","platform":"ios"}`))
+	repeat.Header.Set("Content-Type", "application/json")
+	repeat.RemoteAddr = "192.0.2.90:4321"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, repeat)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "уже отправили") {
+		t.Fatalf("repeat=%d body=%s", response.Code, response.Body.String())
+	}
+	approved, err := application.ApproveAccessRequest(context.Background(), notifier.id)
+	if err != nil || approved.Code == "" {
+		t.Fatalf("approve=%#v err=%v", approved, err)
+	}
+
+	payload, _ := json.Marshal(map[string]string{"request_token": created.Token})
+	status := httptest.NewRequest(http.MethodPost, "/api/v1/access-requests/status", bytes.NewReader(payload))
+	status.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, status)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), approved.Code) || !strings.Contains(response.Body.String(), `"state":"approved"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	activatePayload, _ := json.Marshal(map[string]string{"code": approved.Code, "platform": "ios"})
+	activate := httptest.NewRequest(http.MethodPost, "/api/v1/activate", bytes.NewReader(activatePayload))
+	activate.RemoteAddr = "192.0.2.90:1234"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, activate)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("activate=%d body=%s", response.Code, response.Body.String())
+	}
+
+	duplicate := httptest.NewRequest(http.MethodPost, "/api/v1/access-requests",
+		strings.NewReader(`{"relative_name":"мама","device_name":"iPad","platform":"ios"}`))
+	duplicate.Header.Set("Content-Type", "application/json")
+	duplicate.RemoteAddr = "192.0.2.91:1234"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, duplicate)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("duplicate=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAccessStatusRateLimiter(t *testing.T) {
+	limiter := newIPWindowLimiter(time.Minute, 2, 3)
+	now := time.Now()
+	if !limiter.Allow("192.0.2.1", now) || !limiter.Allow("192.0.2.1", now) || limiter.Allow("192.0.2.1", now) {
+		t.Fatal("per-IP limit was not enforced")
+	}
+	if !limiter.Allow("192.0.2.2", now) || limiter.Allow("192.0.2.3", now) {
+		t.Fatal("global limit was not enforced")
+	}
+	if !limiter.Allow("192.0.2.1", now.Add(time.Minute+time.Second)) {
+		t.Fatal("expired window did not reopen")
 	}
 }

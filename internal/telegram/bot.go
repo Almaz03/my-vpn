@@ -21,6 +21,8 @@ type Application interface {
 	ListDevices(ctx context.Context) ([]Device, error)
 	RevokeDevice(ctx context.Context, id string) error
 	SystemStatus(ctx context.Context) (SystemStatus, error)
+	ApproveAccessRequest(ctx context.Context, id string) (Invitation, error)
+	DenyAccessRequest(ctx context.Context, id string) error
 }
 
 type Invitation struct {
@@ -52,6 +54,7 @@ type Bot struct {
 	app       Application
 	allowlist Allowlist
 	offsets   OffsetStore
+	admins    []int64
 	sleep     func(context.Context, time.Duration) error
 }
 
@@ -84,7 +87,26 @@ func New(config Config) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Bot{api: client, app: config.Application, allowlist: allowlist, offsets: store, sleep: sleepContext}, nil
+	admins := append([]int64(nil), config.Admins...)
+	return &Bot{api: client, app: config.Application, allowlist: allowlist, admins: admins, offsets: store, sleep: sleepContext}, nil
+}
+
+func (b *Bot) NotifyAccessRequest(ctx context.Context, id, relativeName, deviceName, platform string, expiresAt time.Time) error {
+	if validateDeviceID(id) != nil {
+		return errors.New("invalid access request id")
+	}
+	text := fmt.Sprintf("Запрос доступа\nИмя: %s\nУстройство: %s\nПлатформа: %s\nОдобрить до: %s",
+		safeField(relativeName), safeField(deviceName), safeField(platform), expiresAt.In(time.Local).Format("15:04:05"))
+	keyboard := &inlineKeyboard{InlineKeyboard: [][]inlineButton{{
+		{Text: "✅ Одобрить", CallbackData: "access-approve:" + id},
+		{Text: "❌ Отклонить", CallbackData: "access-deny:" + id},
+	}}}
+	for _, chatID := range b.admins {
+		if err := b.api.sendMessage(ctx, chatID, text, keyboard); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Run performs Telegram long polling until ctx is cancelled. Transient errors
@@ -159,7 +181,16 @@ func (b *Bot) handleCallback(ctx context.Context, callback apiCallbackQuery) err
 	if callback.From == nil || !b.allowlist.Authorized(callback.From.ID) {
 		return b.api.answerCallback(ctx, callback.ID, "Команда недоступна.")
 	}
-	if callback.Message == nil || !strings.HasPrefix(callback.Data, "revoke:") {
+	if callback.Message == nil {
+		return b.api.answerCallback(ctx, callback.ID, "Некорректное действие.")
+	}
+	if strings.HasPrefix(callback.Data, "access-approve:") {
+		return b.decideAccessRequest(ctx, callback, true)
+	}
+	if strings.HasPrefix(callback.Data, "access-deny:") {
+		return b.decideAccessRequest(ctx, callback, false)
+	}
+	if !strings.HasPrefix(callback.Data, "revoke:") {
 		return b.api.answerCallback(ctx, callback.ID, "Некорректное действие.")
 	}
 	id := strings.TrimPrefix(callback.Data, "revoke:")
@@ -167,6 +198,39 @@ func (b *Bot) handleCallback(ctx context.Context, callback apiCallbackQuery) err
 		return b.api.answerCallback(ctx, callback.ID, "Некорректное устройство.")
 	}
 	return b.revokeDevice(ctx, callback.Message.Chat.ID, id, callback.ID)
+}
+
+func (b *Bot) decideAccessRequest(ctx context.Context, callback apiCallbackQuery, approve bool) error {
+	prefix := "access-deny:"
+	if approve {
+		prefix = "access-approve:"
+	}
+	id := strings.TrimPrefix(callback.Data, prefix)
+	if validateDeviceID(id) != nil {
+		return b.api.answerCallback(ctx, callback.ID, "Некорректный запрос.")
+	}
+	if !approve {
+		if err := b.app.DenyAccessRequest(ctx, id); err != nil {
+			return b.api.answerCallback(ctx, callback.ID, "Запрос уже обработан или истёк.")
+		}
+		if err := b.api.answerCallback(ctx, callback.ID, "Доступ отклонён."); err != nil {
+			return err
+		}
+		return b.api.sendMessage(ctx, callback.Message.Chat.ID, "Запрос доступа отклонён.", nil)
+	}
+	invitation, err := b.app.ApproveAccessRequest(ctx, id)
+	if err != nil {
+		return b.api.answerCallback(ctx, callback.ID, "Не удалось одобрить: запрос истёк, уже обработан или устройство уже существует.")
+	}
+	if err := b.api.answerCallback(ctx, callback.ID, "Доступ одобрен."); err != nil {
+		return err
+	}
+	expires := invitation.ExpiresAt.In(time.Local).Format("15:04:05")
+	text := fmt.Sprintf("Доступ одобрен.\nКод подтверждения:\n%s\nДействует до: %s", invitation.Code, expires)
+	keyboard := &inlineKeyboard{InlineKeyboard: [][]inlineButton{{{
+		Text: "📋 Скопировать код", CopyText: &copyTextButton{Text: invitation.Code},
+	}}}}
+	return b.api.sendMessage(ctx, callback.Message.Chat.ID, text, keyboard)
 }
 
 func (b *Bot) createInvitation(ctx context.Context, chatID int64, argument string) error {

@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Almaz03/my-vpn/internal/service"
@@ -28,19 +29,29 @@ type API struct {
 	inviteTTL time.Duration
 	webRoot   string
 	startedAt time.Time
+	notifier  AccessRequestNotifier
+	pollLimit *ipWindowLimiter
+}
+
+type AccessRequestNotifier interface {
+	NotifyAccessRequest(ctx context.Context, id, relativeName, deviceName, platform string, expiresAt time.Time) error
 }
 
 func New(service *service.Service, database *store.Store, adminToken, webRoot string, inviteTTL time.Duration) *API {
 	return &API{
 		service: service, store: database, adminHash: sha256.Sum256([]byte(adminToken)),
-		inviteTTL: inviteTTL, webRoot: webRoot, startedAt: time.Now(),
+		inviteTTL: inviteTTL, webRoot: webRoot, startedAt: time.Now(), pollLimit: newIPWindowLimiter(time.Minute, 40, 300),
 	}
 }
+
+func (a *API) SetAccessRequestNotifier(notifier AccessRequestNotifier) { a.notifier = notifier }
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("POST /api/v1/activate", a.activate)
+	mux.HandleFunc("POST /api/v1/access-requests", a.createAccessRequest)
+	mux.HandleFunc("POST /api/v1/access-requests/status", a.accessRequestStatus)
 	mux.HandleFunc("GET /s/{token}", a.subscription)
 	mux.HandleFunc("GET /s/{token}/qr", a.subscriptionQR)
 	mux.HandleFunc("GET /routing/family-ru-direct.json", a.routingProfile)
@@ -53,6 +64,119 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/status", a.requireAdmin(a.status))
 	mux.Handle("/", a.staticHandler())
 	return securityHeaders(mux)
+}
+
+func (a *API) createAccessRequest(w http.ResponseWriter, r *http.Request) {
+	if a.notifier == nil {
+		writeError(w, http.StatusServiceUnavailable, "Запросы доступа временно недоступны.")
+		return
+	}
+	var input struct {
+		RelativeName string `json:"relative_name"`
+		DeviceName   string `json:"device_name"`
+		Platform     string `json:"platform"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "Проверьте имя и устройство.")
+		return
+	}
+	request, err := a.service.CreateAccessRequest(r.Context(), input.RelativeName, input.DeviceName, input.Platform, clientIP(r))
+	if errors.Is(err, store.ErrClientDeviceLimit) {
+		writeError(w, http.StatusConflict, "Для этого имени уже зарегистрировано устройство. Сначала попросите администратора отозвать его.")
+		return
+	}
+	if errors.Is(err, store.ErrAccessRequestLimit) {
+		w.Header().Set("Retry-After", "3600")
+		writeError(w, http.StatusTooManyRequests, "Слишком много запросов. Повторите позже.")
+		return
+	}
+	if errors.Is(err, store.ErrAccessRequestPending) {
+		writeError(w, http.StatusConflict, "Вы уже отправили запрос. Дождитесь решения администратора в этой вкладке.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Проверьте имя и устройство.")
+		return
+	}
+	if err := a.notifier.NotifyAccessRequest(r.Context(), request.ID, request.RelativeName, request.DeviceName, request.Platform, request.ExpiresAt); err != nil {
+		_ = a.service.DenyAccessRequest(r.Context(), request.ID)
+		writeError(w, http.StatusServiceUnavailable, "Не удалось уведомить администратора. Повторите позже.")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"request_token": request.Token, "state": request.State, "expires_at": request.ExpiresAt,
+	})
+}
+
+func (a *API) accessRequestStatus(w http.ResponseWriter, r *http.Request) {
+	if !a.pollLimit.Allow(clientIP(r), time.Now()) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "Слишком много проверок. Подождите минуту.")
+		return
+	}
+	var input struct {
+		Token string `json:"request_token"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "Некорректный запрос.")
+		return
+	}
+	request, err := a.service.AccessRequestStatus(r.Context(), strings.TrimSpace(input.Token))
+	if errors.Is(err, store.ErrAccessRequestNotFound) {
+		writeError(w, http.StatusNotFound, "Запрос не найден или истёк.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "Сервис временно недоступен.")
+		return
+	}
+	writeJSON(w, http.StatusOK, request)
+}
+
+type ipWindowLimiter struct {
+	mu          sync.Mutex
+	window      time.Duration
+	perIPLimit  int
+	globalLimit int
+	byIP        map[[sha256.Size]byte][]time.Time
+	global      []time.Time
+}
+
+func newIPWindowLimiter(window time.Duration, perIPLimit, globalLimit int) *ipWindowLimiter {
+	return &ipWindowLimiter{window: window, perIPLimit: perIPLimit, globalLimit: globalLimit, byIP: make(map[[sha256.Size]byte][]time.Time)}
+}
+
+func (l *ipWindowLimiter) Allow(ip string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := now.Add(-l.window)
+	key := sha256.Sum256([]byte(ip))
+	perIP := pruneTimes(l.byIP[key], cutoff)
+	l.global = pruneTimes(l.global, cutoff)
+	if len(perIP) >= l.perIPLimit || len(l.global) >= l.globalLimit {
+		l.byIP[key] = perIP
+		return false
+	}
+	l.byIP[key] = append(perIP, now)
+	l.global = append(l.global, now)
+	if len(l.byIP) > 4096 {
+		for candidate, events := range l.byIP {
+			if fresh := pruneTimes(events, cutoff); len(fresh) == 0 {
+				delete(l.byIP, candidate)
+			} else {
+				l.byIP[candidate] = fresh
+			}
+		}
+	}
+	return true
+}
+
+func pruneTimes(values []time.Time, cutoff time.Time) []time.Time {
+	first := 0
+	for first < len(values) && !values[first].After(cutoff) {
+		first++
+	}
+	return values[first:]
 }
 
 func (a *API) subscriptionQR(w http.ResponseWriter, r *http.Request) {
@@ -151,10 +275,15 @@ func (a *API) activate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		_ = a.service.ActivationFailure(r.Context(), ip)
 		status := http.StatusUnauthorized
+		message := "Код недействителен, истёк или уже использован."
 		if err.Error() == "unsupported platform" || err.Error() == "device_name is too long" {
 			status = http.StatusBadRequest
 		}
-		writeError(w, status, "Код недействителен, истёк или уже использован.")
+		if errors.Is(err, store.ErrClientDeviceLimit) {
+			status = http.StatusConflict
+			message = "Для этого пользователя уже зарегистрировано устройство. Сначала отзовите прежнее."
+		}
+		writeError(w, status, message)
 		return
 	}
 	_ = a.service.ActivationSuccess(r.Context(), ip)
@@ -191,6 +320,10 @@ func (a *API) createInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		if errors.Is(err, store.ErrClientDeviceLimit) {
+			writeError(w, http.StatusConflict, "client already has an active device")
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

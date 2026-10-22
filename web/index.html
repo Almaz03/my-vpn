@@ -63,6 +63,35 @@
         </form>
 
         <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+
+        <div class="alternative-access">
+          <span>Нет кода?</span>
+          <button class="link-button" type="button" id="show-request-form" aria-expanded="false" aria-controls="access-request-panel">Запросить доступ</button>
+        </div>
+
+        <section id="access-request-panel" class="request-panel" aria-labelledby="request-title" hidden>
+          <h2 id="request-title">Запросить доступ</h2>
+          <p class="hint">Укажите своё имя и устройство. Администратор получит сообщение в Telegram и сможет одобрить запрос в течение часа.</p>
+          <form id="access-request-form" class="request-form" novalidate>
+            <label for="request-name">Ваше имя
+              <input id="request-name" name="request-name" type="text" autocomplete="name" maxlength="100" required>
+            </label>
+            <label for="request-device">Название устройства
+              <input id="request-device" name="request-device" type="text" autocomplete="off" maxlength="100" placeholder="Например, iPhone 15" required>
+            </label>
+            <button class="primary" type="submit" id="request-submit">Отправить запрос</button>
+          </form>
+          <div id="request-status" class="status" role="status" aria-live="polite" hidden></div>
+          <div id="approved-code-panel" class="secret-result" hidden>
+            <span>Код подтверждения</span>
+            <strong id="approved-code" class="secret-code"></strong>
+            <div class="request-actions">
+              <button class="secondary" type="button" id="copy-approved-code">Скопировать код</button>
+              <button class="primary" type="button" id="use-approved-code">Подключить это устройство</button>
+            </div>
+            <p class="hint" id="approved-code-expiry"></p>
+          </div>
+        </section>
       </section>
 
       <section class="card result" id="result-panel" tabindex="-1" aria-labelledby="result-title" hidden>
@@ -123,7 +152,7 @@
         </details>
         <details>
           <summary>Можно подключить второе устройство?</summary>
-          <p>Да, но для него потребуется новое приглашение и отдельный профиль.</p>
+          <p>Нет. Для одного имени разрешено одно активное устройство. Чтобы подключить другое, администратор сначала отзывает прежнее.</p>
         </details>
       </section>
 

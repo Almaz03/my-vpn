@@ -25,6 +25,8 @@ type fakeApplication struct {
 	status         SystemStatus
 	invitationCode string
 	err            error
+	approvedID     string
+	deniedID       string
 }
 
 func (a *fakeApplication) CreateInvitation(_ context.Context, relativeName, deviceName string, ttl time.Duration) (Invitation, error) {
@@ -51,6 +53,19 @@ func (a *fakeApplication) RevokeDevice(_ context.Context, id string) error {
 
 func (a *fakeApplication) SystemStatus(context.Context) (SystemStatus, error) {
 	return a.status, a.err
+}
+
+func (a *fakeApplication) ApproveAccessRequest(_ context.Context, id string) (Invitation, error) {
+	a.approvedID = id
+	if a.err != nil {
+		return Invitation{}, a.err
+	}
+	return Invitation{Code: a.invitationCode, ExpiresAt: time.Date(2030, 1, 2, 4, 5, 6, 0, time.Local)}, nil
+}
+
+func (a *fakeApplication) DenyAccessRequest(_ context.Context, id string) error {
+	a.deniedID = id
+	return a.err
 }
 
 type recordedRequest struct {
@@ -153,6 +168,38 @@ func TestDevicesAndRevokeCallback(t *testing.T) {
 	}
 	if len(*requests) != 3 || (*requests)[1].method != "answerCallbackQuery" || (*requests)[2].method != "sendMessage" {
 		t.Fatalf("unexpected callback calls: %#v", *requests)
+	}
+}
+
+func TestAccessRequestNotificationApprovalHasCopyButton(t *testing.T) {
+	server, requests := telegramServer(t)
+	defer server.Close()
+	app := &fakeApplication{invitationCode: "ABCD-EFGH"}
+	bot := newTestBot(t, server, app)
+	const requestID = "0123456789abcdef0123456789abcdef"
+
+	if err := bot.NotifyAccessRequest(context.Background(), requestID, "Мама", "iPhone", "ios", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if len(*requests) != 1 || (*requests)[0].body["reply_markup"] == nil || !strings.Contains((*requests)[0].body["text"].(string), "Мама") {
+		t.Fatalf("notification=%#v", *requests)
+	}
+	if err := bot.handleUpdate(context.Background(), apiUpdate{Callback: &apiCallbackQuery{
+		ID: "callback-access", From: &apiUser{ID: 42}, Data: "access-approve:" + requestID,
+		Message: &apiMessage{Chat: apiChat{ID: 42}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if app.approvedID != requestID || len(*requests) != 3 {
+		t.Fatalf("approved=%q requests=%#v", app.approvedID, *requests)
+	}
+	message := (*requests)[2]
+	if !strings.Contains(message.body["text"].(string), "ABCD-EFGH") {
+		t.Fatalf("approval message=%#v", message)
+	}
+	keyboard, ok := message.body["reply_markup"].(map[string]any)
+	if !ok || keyboard["inline_keyboard"] == nil {
+		t.Fatalf("copy keyboard=%#v", message.body["reply_markup"])
 	}
 }
 

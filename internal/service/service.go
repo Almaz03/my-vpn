@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +13,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Almaz03/my-vpn/internal/codes"
@@ -24,6 +27,7 @@ type Service struct {
 	hmacKey     []byte
 	baseURL     *url.URL
 	now         func() time.Time
+	accessMu    sync.Mutex
 }
 
 type Activation struct {
@@ -37,6 +41,17 @@ type Activation struct {
 type SubscriptionPayload struct {
 	Body      string
 	ExpiresAt time.Time
+}
+
+type AccessRequest struct {
+	ID           string    `json:"id,omitempty"`
+	Token        string    `json:"token,omitempty"`
+	RelativeName string    `json:"relative_name,omitempty"`
+	DeviceName   string    `json:"device_name,omitempty"`
+	Platform     string    `json:"platform,omitempty"`
+	State        string    `json:"state"`
+	Code         string    `json:"code,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 type RoutingProfile struct {
@@ -82,6 +97,13 @@ func (s *Service) CreateInvitation(ctx context.Context, relativeName, deviceName
 	if ttl < time.Minute || ttl > time.Hour {
 		return store.Invitation{}, "", errors.New("ttl must be between 1 minute and 1 hour")
 	}
+	hasDevice, err := s.store.ClientHasDevice(ctx, relativeName)
+	if err != nil {
+		return store.Invitation{}, "", err
+	}
+	if hasDevice {
+		return store.Invitation{}, "", store.ErrClientDeviceLimit
+	}
 	code, err := codes.Generate()
 	if err != nil {
 		return store.Invitation{}, "", err
@@ -91,6 +113,131 @@ func (s *Service) CreateInvitation(ctx context.Context, relativeName, deviceName
 		return store.Invitation{}, "", err
 	}
 	return invitation, code, nil
+}
+
+func (s *Service) CreateAccessRequest(ctx context.Context, relativeName, deviceName, platform, remoteIP string) (AccessRequest, error) {
+	relativeName = strings.TrimSpace(relativeName)
+	deviceName = strings.TrimSpace(deviceName)
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if relativeName == "" || len([]rune(relativeName)) > 100 {
+		return AccessRequest{}, errors.New("relative_name must contain 1 to 100 characters")
+	}
+	if deviceName == "" || len([]rune(deviceName)) > 100 {
+		return AccessRequest{}, errors.New("device_name must contain 1 to 100 characters")
+	}
+	if !supportedPlatform(platform) {
+		return AccessRequest{}, errors.New("unsupported platform")
+	}
+	hasDevice, err := s.store.ClientHasDevice(ctx, relativeName)
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	if hasDevice {
+		return AccessRequest{}, store.ErrClientDeviceLimit
+	}
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return AccessRequest{}, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw[:])
+	expiresAt := s.now().Add(time.Hour)
+	request, err := s.store.CreateAccessRequest(ctx, s.accessRequestHMAC(token), relativeName, deviceName, platform, s.ipHash(remoteIP), expiresAt)
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	return AccessRequest{ID: request.ID, Token: token, RelativeName: relativeName, DeviceName: deviceName, Platform: platform, State: request.State, ExpiresAt: request.ExpiresAt}, nil
+}
+
+func (s *Service) AccessRequestStatus(ctx context.Context, token string) (AccessRequest, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != token {
+		return AccessRequest{}, store.ErrAccessRequestNotFound
+	}
+	request, err := s.store.AccessRequestByToken(ctx, s.accessRequestHMAC(token))
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	result := AccessRequest{State: request.State, ExpiresAt: request.ExpiresAt}
+	if request.State == "approved" {
+		result.Code, err = s.decryptAccessCode(request.EncryptedCode)
+		if err != nil {
+			return AccessRequest{}, err
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) ApproveAccessRequest(ctx context.Context, id string) (AccessRequest, error) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	request, err := s.store.AccessRequestByID(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	if request.State != "pending" || !request.ExpiresAt.After(s.now()) {
+		return AccessRequest{}, store.ErrAccessRequestState
+	}
+	invitation, code, err := s.CreateInvitation(ctx, request.RelativeName, request.DeviceName, time.Hour)
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	encrypted, err := s.encryptAccessCode(code)
+	if err != nil {
+		_ = s.store.RevokeInvitation(ctx, invitation.ID)
+		return AccessRequest{}, err
+	}
+	if err := s.store.ApproveAccessRequest(ctx, request.ID, invitation.ID, encrypted, invitation.ExpiresAt); err != nil {
+		_ = s.store.RevokeInvitation(ctx, invitation.ID)
+		return AccessRequest{}, err
+	}
+	return AccessRequest{ID: request.ID, RelativeName: request.RelativeName, DeviceName: request.DeviceName,
+		Platform: request.Platform, State: "approved", Code: code, ExpiresAt: invitation.ExpiresAt}, nil
+}
+
+func (s *Service) DenyAccessRequest(ctx context.Context, id string) error {
+	return s.store.DenyAccessRequest(ctx, strings.TrimSpace(id))
+}
+
+func (s *Service) accessRequestHMAC(token string) []byte {
+	mac := hmac.New(sha256.New, s.hmacKey)
+	_, _ = mac.Write([]byte("access-request-token:\x00" + token))
+	return mac.Sum(nil)
+}
+
+func (s *Service) accessCodeAEAD() (cipher.AEAD, error) {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("access-request-code:\x00"))
+	_, _ = digest.Write(s.hmacKey)
+	block, err := aes.NewCipher(digest.Sum(nil))
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func (s *Service) encryptAccessCode(code string) ([]byte, error) {
+	aead, err := s.accessCodeAEAD()
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return aead.Seal(nonce, nonce, []byte(code), []byte("my-vpn/access-code/v1")), nil
+}
+
+func (s *Service) decryptAccessCode(value []byte) (string, error) {
+	aead, err := s.accessCodeAEAD()
+	if err != nil || len(value) < aead.NonceSize() {
+		return "", errors.New("invalid encrypted access code")
+	}
+	nonce, ciphertext := value[:aead.NonceSize()], value[aead.NonceSize():]
+	plain, err := aead.Open(nil, nonce, ciphertext, []byte("my-vpn/access-code/v1"))
+	if err != nil || !codes.Valid(string(plain)) {
+		return "", errors.New("invalid encrypted access code")
+	}
+	return string(plain), nil
 }
 
 func (s *Service) Activate(ctx context.Context, code, platform, requestedDeviceName, remoteIP string) (Activation, error) {
@@ -180,7 +327,7 @@ func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionP
 }
 
 func (s *Service) RoutingProfileURL() string {
-	return s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json"}).String()
+	return s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json", RawQuery: "v=2"}).String()
 }
 
 func (s *Service) SubscriptionDeepLink(token string) string {
@@ -197,7 +344,7 @@ func (s *Service) RoutingProfile() RoutingProfile {
 		DomesticDNSType: "DoH", DomesticDNSDomain: "https://common.dot.dns.yandex.net/dns-query", DomesticDNSIP: "77.88.8.8",
 		GeoIPURL: geoIP, GeositeURL: geosite,
 		DNSHosts:    map[string]string{"cloudflare-dns.com": "1.1.1.1", "common.dot.dns.yandex.net": "77.88.8.8"},
-		DirectSites: []string{"geosite:ru", "domain:gosuslugi.ru", "domain:nalog.gov.ru", "domain:mos.ru", "domain:sberbank.ru", "domain:tbank.ru", "domain:alfabank.ru", "domain:ozon.ru", "domain:wildberries.ru"},
+		DirectSites: []string{"domain:ru", "domain:xn--p1ai", "domain:gosuslugi.ru", "domain:nalog.gov.ru", "domain:mos.ru", "domain:sberbank.ru", "domain:tbank.ru", "domain:alfabank.ru", "domain:ozon.ru", "domain:wildberries.ru"},
 		DirectIP:    []string{"geoip:ru", "geoip:private", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8"},
 		ProxySites:  []string{}, ProxyIP: []string{}, BlockSites: []string{}, BlockIP: []string{},
 		DomainStrategy: "IPIfNonMatch", FakeDNS: "false",

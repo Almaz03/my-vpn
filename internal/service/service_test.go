@@ -241,7 +241,7 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	}
 }
 
-func TestSeparateDevicesHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T) {
+func TestSeparateClientsHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T) {
 	database, err := store.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,8 @@ func TestSeparateDevicesHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T
 	application := New(database, provider, []byte(strings.Repeat("u", 32)), base)
 	var activations []Activation
 	for index, platform := range []string{"android", "linux"} {
-		_, code, err := application.CreateInvitation(context.Background(), "Семья", "Device", 10*time.Minute)
+		clientName := []string{"Мама", "Папа"}[index]
+		_, code, err := application.CreateInvitation(context.Background(), clientName, "Device", 10*time.Minute)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -275,5 +276,32 @@ func TestSeparateDevicesHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T
 	}
 	if _, err := application.Subscription(context.Background(), secondToken); err != nil {
 		t.Fatalf("unrelated device subscription failed: %v", err)
+	}
+}
+
+func TestOneActiveDevicePerClient(t *testing.T) {
+	database, err := store.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	base, _ := url.Parse("https://vpn.example.test")
+	application := New(database, &subscriptionProvisioner{}, []byte(strings.Repeat("l", 32)), base)
+	_, code, err := application.CreateInvitation(context.Background(), "Мама", "iPhone", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := application.Activate(context.Background(), code, "ios", "", "192.0.2.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := application.CreateInvitation(context.Background(), "мама", "iPad", 10*time.Minute); !errors.Is(err, store.ErrClientDeviceLimit) {
+		t.Fatalf("second device invitation error=%v", err)
+	}
+	if _, err := application.Revoke(context.Background(), first.Device.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := application.CreateInvitation(context.Background(), "МАМА", "iPad", 10*time.Minute); err != nil {
+		t.Fatalf("invitation after revoke: %v", err)
 	}
 }

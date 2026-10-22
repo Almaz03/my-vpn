@@ -36,12 +36,104 @@
   const qrStep = document.querySelector('#qr-step');
   const qrImage = document.querySelector('#qr-image');
   const routingNote = document.querySelector('#routing-note');
+  const showRequestForm = document.querySelector('#show-request-form');
+  const accessRequestPanel = document.querySelector('#access-request-panel');
+  const accessRequestForm = document.querySelector('#access-request-form');
+  const requestName = document.querySelector('#request-name');
+  const requestDevice = document.querySelector('#request-device');
+  const requestSubmit = document.querySelector('#request-submit');
+  const requestStatus = document.querySelector('#request-status');
+  const approvedCodePanel = document.querySelector('#approved-code-panel');
+  const approvedCode = document.querySelector('#approved-code');
+  const approvedCodeExpiry = document.querySelector('#approved-code-expiry');
+  const copyApprovedCode = document.querySelector('#copy-approved-code');
+  const useApprovedCode = document.querySelector('#use-approved-code');
 
   let platform = detectPlatform();
   let deepLink = '';
   let nextAttemptAt = 0;
+  let requestToken = '';
+  let pollTimer = 0;
 
   selectPlatform(platform);
+
+  try {
+    const saved = sessionStorage.getItem('accessRequestToken') || '';
+    if (/^[A-Za-z0-9_-]{43}$/.test(saved)) {
+      requestToken = saved;
+      openRequestPanel();
+      setRequestBusy(true);
+      showRequestStatus('Проверяем состояние запроса…', 'busy');
+      pollAccessRequest();
+    }
+  } catch {
+    // The flow still works when browser storage is unavailable.
+  }
+
+  showRequestForm.addEventListener('click', () => {
+    if (accessRequestPanel.hidden) {
+      openRequestPanel();
+      requestName.focus();
+    } else if (!requestToken) {
+      accessRequestPanel.hidden = true;
+      showRequestForm.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  accessRequestForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const relativeName = requestName.value.trim();
+    const deviceName = requestDevice.value.trim();
+    if (!relativeName || !deviceName || [...relativeName].length > 100 || [...deviceName].length > 100) {
+      showRequestStatus('Заполните имя и название устройства (до 100 символов).', 'error');
+      return;
+    }
+    setRequestBusy(true);
+    showRequestStatus('Отправляем запрос администратору…', 'busy');
+    try {
+      const response = await fetch('/api/v1/access-requests', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+        body: JSON.stringify({relative_name: relativeName, device_name: deviceName, platform})
+      });
+      const data = await readJson(response);
+      if (!response.ok) {
+        if (response.status === 400 || response.status === 404) {
+          clearAccessRequestToken();
+          setRequestBusy(false);
+          showRequestStatus(requestError(response.status, data), 'error');
+          return;
+        }
+        throw new Error(requestError(response.status, data));
+      }
+      if (typeof data.request_token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(data.request_token)) {
+        throw new Error('Сервис вернул некорректный ответ. Повторите позже.');
+      }
+      requestToken = data.request_token;
+      try { sessionStorage.setItem('accessRequestToken', requestToken); } catch { /* optional */ }
+      showRequestStatus('Запрос отправлен. Ожидаем решение администратора — страницу можно не закрывать.', 'busy');
+      pollAccessRequest();
+    } catch (error) {
+      setRequestBusy(false);
+      showRequestStatus(error instanceof Error ? error.message : 'Не удалось отправить запрос.', 'error');
+    }
+  });
+
+  copyApprovedCode.addEventListener('click', async () => {
+    if (!approvedCode.textContent) return;
+    const copied = await copyText(approvedCode.textContent);
+    copyApprovedCode.textContent = copied ? 'Код скопирован' : 'Выделите код выше';
+  });
+
+  useApprovedCode.addEventListener('click', () => {
+    const code = approvedCode.textContent.trim();
+    if (!/^[A-Z0-9-]{4,16}$/.test(code)) return;
+    codeInput.value = code;
+    accessRequestPanel.hidden = true;
+    showRequestForm.setAttribute('aria-expanded', 'false');
+    codeInput.focus();
+    form.requestSubmit();
+  });
 
   changePlatform.addEventListener('click', () => {
     const willOpen = platformPicker.hidden;
@@ -185,13 +277,113 @@
   function publicError(status, data) {
     if (status === 429) return 'Слишком много попыток. Подождите и попробуйте снова.';
     if (status === 400) return 'Проверьте формат кода приглашения.';
+    if (status === 409 && typeof data.error === 'string' && data.error.length <= 180) return data.error;
     if (status === 404 || status === 409 || status === 410) return 'Код недействителен, уже использован или истёк. Попросите новый код.';
     if (status >= 500) return 'Сервис временно недоступен. Попробуйте позже.';
-    if (typeof data.message === 'string' && data.message.length <= 180) return data.message;
+    if (typeof data.error === 'string' && data.error.length <= 180) return data.error;
     return 'Не удалось активировать приглашение.';
   }
 
+  function openRequestPanel() {
+    accessRequestPanel.hidden = false;
+    showRequestForm.setAttribute('aria-expanded', 'true');
+  }
+
+  function setRequestBusy(busy) {
+    requestName.disabled = busy;
+    requestDevice.disabled = busy;
+    requestSubmit.disabled = busy;
+    requestSubmit.textContent = busy ? 'Ожидаем решение…' : 'Отправить запрос';
+    accessRequestForm.setAttribute('aria-busy', String(busy));
+  }
+
+  function showRequestStatus(message, kind) {
+    requestStatus.textContent = message;
+    requestStatus.className = `status status--${kind}`;
+    requestStatus.hidden = false;
+  }
+
+  function requestError(status, data) {
+    if (typeof data.error === 'string' && data.error.length <= 180) return data.error;
+    if (status === 409) return 'Для этого имени уже зарегистрировано устройство.';
+    if (status === 429) return 'Слишком много запросов. Повторите через час.';
+    if (status >= 500) return 'Сервис временно недоступен. Повторите позже.';
+    return 'Проверьте имя и название устройства.';
+  }
+
+  async function pollAccessRequest() {
+    window.clearTimeout(pollTimer);
+    if (!requestToken) return;
+    try {
+      const response = await fetch('/api/v1/access-requests/status', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+        body: JSON.stringify({request_token: requestToken})
+      });
+      const data = await readJson(response);
+      if (!response.ok) {
+        if (response.status === 400 || response.status === 404) {
+          clearAccessRequestToken();
+          setRequestBusy(false);
+          showRequestStatus(requestError(response.status, data), 'error');
+          return;
+        }
+        throw new Error(requestError(response.status, data));
+      }
+      if (data.state === 'approved' && typeof data.code === 'string' && /^[A-Z0-9-]{4,16}$/.test(data.code)) {
+        approvedCode.textContent = data.code;
+        approvedCodeExpiry.textContent = `Код действует до ${formatExpiry(data.expires_at)} и используется один раз.`;
+        approvedCodePanel.hidden = false;
+        showRequestStatus('Доступ одобрен. Скопируйте код или сразу подключите устройство.', 'success');
+        return;
+      }
+      if (data.state === 'denied') {
+        clearAccessRequestToken();
+        setRequestBusy(false);
+        showRequestStatus('Администратор отклонил запрос.', 'error');
+        return;
+      }
+      if (data.state === 'expired') {
+        clearAccessRequestToken();
+        setRequestBusy(false);
+        showRequestStatus('Время ожидания истекло. Можно отправить новый запрос.', 'error');
+        return;
+      }
+      showRequestStatus('Запрос отправлен. Ожидаем решение администратора…', 'busy');
+      pollTimer = window.setTimeout(pollAccessRequest, 3000);
+    } catch (error) {
+      showRequestStatus(error instanceof Error ? error.message : 'Не удалось проверить запрос.', 'error');
+      pollTimer = window.setTimeout(pollAccessRequest, 5000);
+    }
+  }
+
+  function clearAccessRequestToken() {
+    requestToken = '';
+    try { sessionStorage.removeItem('accessRequestToken'); } catch { /* optional */ }
+  }
+
+  function formatExpiry(value) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'указанного времени' : date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  }
+
+  async function copyText(value) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return true;
+      } catch { /* use selection fallback */ }
+    }
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(approvedCode);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return false;
+  }
+
   function renderResult(data) {
+    clearAccessRequestToken();
     clearStatus();
     deepLink = safeDeepLink(data.incy_deep_link);
     const downloadUrl = safeLocalUrl(data.config_download_url);

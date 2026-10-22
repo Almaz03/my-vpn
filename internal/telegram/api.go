@@ -82,8 +82,13 @@ type inlineKeyboard struct {
 }
 
 type inlineButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data"`
+	Text         string          `json:"text"`
+	CallbackData string          `json:"callback_data,omitempty"`
+	CopyText     *copyTextButton `json:"copy_text,omitempty"`
+}
+
+type copyTextButton struct {
+	Text string `json:"text"`
 }
 
 type apiResponse[T any] struct {

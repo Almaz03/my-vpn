@@ -46,6 +46,18 @@ func (a telegramAdapter) RevokeDevice(ctx context.Context, id string) error {
 	return err
 }
 
+func (a telegramAdapter) ApproveAccessRequest(ctx context.Context, id string) (telegram.Invitation, error) {
+	request, err := a.service.ApproveAccessRequest(ctx, id)
+	if err != nil {
+		return telegram.Invitation{}, err
+	}
+	return telegram.Invitation{Code: request.Code, ExpiresAt: request.ExpiresAt}, nil
+}
+
+func (a telegramAdapter) DenyAccessRequest(ctx context.Context, id string) error {
+	return a.service.DenyAccessRequest(ctx, id)
+}
+
 func (a telegramAdapter) SystemStatus(ctx context.Context) (telegram.SystemStatus, error) {
 	if err := a.store.Ping(ctx); err != nil {
 		return telegram.SystemStatus{}, err

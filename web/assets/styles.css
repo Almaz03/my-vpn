@@ -150,6 +150,16 @@ input[type="text"]:focus, button:focus-visible, a:focus-visible, summary:focus-v
 
 .hint { margin: 8px 0 24px; color: var(--muted); font-size: 0.82rem; }
 
+.alternative-access { display: flex; align-items: center; gap: 8px; margin-top: 18px; color: var(--muted); font-size: 0.9rem; }
+.alternative-access .link-button { margin-left: 0; }
+.request-panel { margin-top: 18px; padding-top: 20px; border-top: 1px solid var(--line); }
+.request-panel h2 { margin-bottom: 8px; font-size: 1.3rem; }
+.request-form { display: grid; gap: 14px; }
+.request-form label { display: grid; gap: 7px; }
+.request-form input[type="text"] { min-height: 50px; font-size: 1rem; font-weight: 600; letter-spacing: normal; text-transform: none; }
+.request-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.request-actions button { flex: 1 1 190px; padding: 0 16px; }
+
 .device-row {
   display: flex;
   align-items: center;
@@ -170,6 +180,7 @@ input[type="text"]:focus, button:focus-visible, a:focus-visible, summary:focus-v
 .status { margin-top: 18px; padding: 13px 15px; border-radius: 12px; line-height: 1.45; }
 .status--error { color: var(--danger); background: var(--danger-soft); }
 .status--busy { color: var(--warning); background: var(--warning-soft); }
+.status--success { color: var(--accent-strong); background: var(--accent-soft); }
 
 .result { position: relative; overflow: hidden; }
 .success-mark { position: absolute; top: 25px; right: 28px; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; color: #fff; background: var(--accent); font-size: 1.4rem; }

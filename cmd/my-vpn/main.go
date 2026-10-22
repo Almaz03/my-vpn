@@ -62,6 +62,7 @@ func main() {
 			logger.Error("Telegram configuration rejected", "error", err)
 			os.Exit(1)
 		}
+		api.SetAccessRequestNotifier(bot)
 		go func() {
 			if err := bot.Run(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("Telegram transport stopped", "error", err)

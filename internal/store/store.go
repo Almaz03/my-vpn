@@ -28,6 +28,11 @@ var (
 	ErrDeviceNotFound          = errors.New("device not found")
 	ErrInvitationCreationLimit = errors.New("invitation creation limit reached")
 	ErrSubscriptionNotFound    = errors.New("subscription is invalid or expired")
+	ErrAccessRequestNotFound   = errors.New("access request not found")
+	ErrAccessRequestLimit      = errors.New("access request limit reached")
+	ErrAccessRequestPending    = errors.New("access request is already pending")
+	ErrAccessRequestState      = errors.New("access request is no longer pending")
+	ErrClientDeviceLimit       = errors.New("client already has an active device")
 )
 
 type Store struct {
@@ -61,6 +66,17 @@ type Subscription struct {
 	DeviceID      string
 	CredentialRef string
 	ExpiresAt     time.Time
+}
+
+type AccessRequest struct {
+	ID            string    `json:"id"`
+	RelativeName  string    `json:"relative_name"`
+	DeviceName    string    `json:"device_name"`
+	Platform      string    `json:"platform"`
+	State         string    `json:"state"`
+	EncryptedCode []byte    `json:"-"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type Stats struct {
@@ -147,6 +163,172 @@ func (s *Store) CreateInvitation(ctx context.Context, hash []byte, relativeName,
 		return Invitation{}, fmt.Errorf("commit invitation creation: %w", err)
 	}
 	return invitation, nil
+}
+
+func (s *Store) ClientHasDevice(ctx context.Context, relativeName string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT relative_name FROM devices
+		WHERE state IN ('pending', 'active', 'revoke_pending') AND revoked_at IS NULL`)
+	if err != nil {
+		return false, fmt.Errorf("list client device claims: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var existing string
+		if err := rows.Scan(&existing); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(strings.TrimSpace(existing), strings.TrimSpace(relativeName)) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func (s *Store) CreateAccessRequest(ctx context.Context, tokenHMAC []byte, relativeName, deviceName, platform, remoteIPHash string, expiresAt time.Time) (AccessRequest, error) {
+	if len(tokenHMAC) != 32 {
+		return AccessRequest{}, errors.New("invalid access request token HMAC")
+	}
+	id, err := randomID()
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	now := s.now().UTC().Truncate(time.Second)
+	request := AccessRequest{ID: id, RelativeName: relativeName, DeviceName: deviceName, Platform: platform, State: "pending", ExpiresAt: expiresAt.UTC().Truncate(time.Second), CreatedAt: now}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE access_requests SET state = 'expired', encrypted_code = NULL
+		WHERE state IN ('pending', 'approved') AND expires_at <= ?`, now.Unix()); err != nil {
+		return AccessRequest{}, fmt.Errorf("expire access requests: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM access_requests WHERE created_at < ?`, now.Add(-24*time.Hour).Unix()); err != nil {
+		return AccessRequest{}, fmt.Errorf("prune access requests: %w", err)
+	}
+	cutoff := now.Add(-time.Hour).Unix()
+	var perIP, global int
+	pendingRows, err := tx.QueryContext(ctx, `SELECT relative_name FROM access_requests
+		WHERE remote_ip_hmac = ? AND state = 'pending' AND expires_at > ?`, remoteIPHash, now.Unix())
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	alreadyPending := false
+	for pendingRows.Next() {
+		var existing string
+		if err := pendingRows.Scan(&existing); err != nil {
+			pendingRows.Close()
+			return AccessRequest{}, err
+		}
+		if strings.EqualFold(strings.TrimSpace(existing), strings.TrimSpace(relativeName)) {
+			alreadyPending = true
+		}
+	}
+	if err := pendingRows.Close(); err != nil {
+		return AccessRequest{}, err
+	}
+	if alreadyPending {
+		return AccessRequest{}, ErrAccessRequestPending
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM access_requests WHERE remote_ip_hmac = ? AND created_at >= ?`, remoteIPHash, cutoff).Scan(&perIP); err != nil {
+		return AccessRequest{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM access_requests WHERE created_at >= ?`, cutoff).Scan(&global); err != nil {
+		return AccessRequest{}, err
+	}
+	if perIP >= 3 || global >= 30 {
+		return AccessRequest{}, ErrAccessRequestLimit
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO access_requests
+		(id, token_hmac, relative_name, device_name, platform, remote_ip_hmac, state, expires_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`, id, tokenHMAC, relativeName, deviceName, platform, remoteIPHash, request.ExpiresAt.Unix(), now.Unix())
+	if err != nil {
+		return AccessRequest{}, fmt.Errorf("insert access request: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, remote_ip_hmac, detail, created_at)
+		VALUES('access.requested', ?, ?, ?, ?)`, id, remoteIPHash, platform, now.Unix()); err != nil {
+		return AccessRequest{}, fmt.Errorf("audit access request: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return AccessRequest{}, err
+	}
+	return request, nil
+}
+
+func (s *Store) AccessRequestByToken(ctx context.Context, tokenHMAC []byte) (AccessRequest, error) {
+	if len(tokenHMAC) != 32 {
+		return AccessRequest{}, ErrAccessRequestNotFound
+	}
+	request, err := scanAccessRequest(s.db.QueryRowContext(ctx, `SELECT id, relative_name, device_name, platform, state,
+		encrypted_code, expires_at, created_at FROM access_requests WHERE token_hmac = ?`, tokenHMAC))
+	if errors.Is(err, sql.ErrNoRows) {
+		return AccessRequest{}, ErrAccessRequestNotFound
+	}
+	if err != nil {
+		return AccessRequest{}, err
+	}
+	if !request.ExpiresAt.After(s.now().UTC()) && request.State != "denied" && request.State != "expired" {
+		_, _ = s.db.ExecContext(ctx, `UPDATE access_requests SET state = 'expired', encrypted_code = NULL WHERE id = ?`, request.ID)
+		request.State = "expired"
+		request.EncryptedCode = nil
+	}
+	return request, nil
+}
+
+func (s *Store) AccessRequestByID(ctx context.Context, id string) (AccessRequest, error) {
+	request, err := scanAccessRequest(s.db.QueryRowContext(ctx, `SELECT id, relative_name, device_name, platform, state,
+		encrypted_code, expires_at, created_at FROM access_requests WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return AccessRequest{}, ErrAccessRequestNotFound
+	}
+	return request, err
+}
+
+func (s *Store) ApproveAccessRequest(ctx context.Context, id, invitationID string, encryptedCode []byte, codeExpiresAt time.Time) error {
+	now := s.now().UTC().Truncate(time.Second)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE access_requests SET state = 'approved', invitation_id = ?,
+		encrypted_code = ?, expires_at = ?, decided_at = ? WHERE id = ? AND state = 'pending' AND expires_at > ?`,
+		invitationID, encryptedCode, codeExpiresAt.UTC().Unix(), now.Unix(), id, now.Unix())
+	if err != nil {
+		return fmt.Errorf("approve access request: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows != 1 {
+		return ErrAccessRequestState
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, detail, created_at)
+		VALUES('access.approved', ?, '', ?)`, id, now.Unix()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DenyAccessRequest(ctx context.Context, id string) error {
+	now := s.now().UTC().Truncate(time.Second)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE access_requests SET state = 'denied', encrypted_code = NULL,
+		decided_at = ? WHERE id = ? AND state = 'pending' AND expires_at > ?`, now.Unix(), id, now.Unix())
+	if err != nil {
+		return fmt.Errorf("deny access request: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows != 1 {
+		return ErrAccessRequestState
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, detail, created_at)
+		VALUES('access.denied', ?, '', ?)`, id, now.Unix()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RevokeInvitation(ctx context.Context, id string) error {
@@ -300,6 +482,36 @@ func (s *Store) ConsumeInvitation(ctx context.Context, hash []byte, platform, re
 		}
 		committed = true
 		return Device{}, rejection
+	}
+	deviceRows, err := conn.QueryContext(ctx, `SELECT relative_name FROM devices
+		WHERE state IN ('pending', 'active', 'revoke_pending') AND revoked_at IS NULL`)
+	if err != nil {
+		return Device{}, fmt.Errorf("check client device limit: %w", err)
+	}
+	hasDevice := false
+	for deviceRows.Next() {
+		var existing string
+		if err := deviceRows.Scan(&existing); err != nil {
+			deviceRows.Close()
+			return Device{}, err
+		}
+		if strings.EqualFold(strings.TrimSpace(existing), strings.TrimSpace(relativeName)) {
+			hasDevice = true
+		}
+	}
+	if err := deviceRows.Close(); err != nil {
+		return Device{}, err
+	}
+	if hasDevice {
+		if _, err := conn.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, remote_ip_hmac, detail, created_at)
+			VALUES('activation.client_device_limit', ?, ?, '', ?)`, id, remoteIPHash, now.Unix()); err != nil {
+			return Device{}, err
+		}
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			return Device{}, err
+		}
+		committed = true
+		return Device{}, ErrClientDeviceLimit
 	}
 
 	if clean := strings.TrimSpace(requestedDeviceName); clean != "" {
@@ -639,6 +851,18 @@ type queryRower interface {
 
 type invitationScanner interface {
 	Scan(...any) error
+}
+
+func scanAccessRequest(row invitationScanner) (AccessRequest, error) {
+	var request AccessRequest
+	var expires, created int64
+	if err := row.Scan(&request.ID, &request.RelativeName, &request.DeviceName, &request.Platform,
+		&request.State, &request.EncryptedCode, &expires, &created); err != nil {
+		return AccessRequest{}, err
+	}
+	request.ExpiresAt = time.Unix(expires, 0).UTC()
+	request.CreatedAt = time.Unix(created, 0).UTC()
+	return request, nil
 }
 
 func scanInvitation(row invitationScanner) (Invitation, error) {

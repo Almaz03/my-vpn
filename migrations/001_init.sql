@@ -76,3 +76,20 @@ CREATE TABLE IF NOT EXISTS admin_invitation_creations (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS admin_invitation_creations_time_idx ON admin_invitation_creations(created_at);
+
+CREATE TABLE IF NOT EXISTS access_requests (
+    id TEXT PRIMARY KEY,
+    token_hmac BLOB NOT NULL UNIQUE,
+    relative_name TEXT NOT NULL,
+    device_name TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    remote_ip_hmac TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'expired')),
+    invitation_id TEXT REFERENCES invitations(id),
+    encrypted_code BLOB,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS access_requests_expires_idx ON access_requests(expires_at);
+CREATE INDEX IF NOT EXISTS access_requests_ip_time_idx ON access_requests(remote_ip_hmac, created_at);
