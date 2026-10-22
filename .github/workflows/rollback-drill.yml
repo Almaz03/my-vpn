@@ -1,0 +1,91 @@
+name: Verify production rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: Existing release SHA to roll back to
+        required: true
+        type: string
+      restore_version:
+        description: Current release SHA to restore after the drill
+        required: true
+        type: string
+      confirm:
+        description: Type ROLLBACK-DRILL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  rollback-drill:
+    if: inputs.confirm == 'ROLLBACK-DRILL'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/known_hosts"
+
+      - name: Roll back, verify, and restore
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+          RESTORE_VERSION: ${{ inputs.restore_version }}
+        run: |
+          set -euo pipefail
+          DEPLOY_USER=my-vpn-deploy
+          [[ "$DEPLOY_HOST" =~ ^([A-Za-z0-9.-]+|[0-9]{1,3}(\.[0-9]{1,3}){3})$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          [[ "$TARGET_VERSION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RESTORE_VERSION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_VERSION" != "$RESTORE_VERSION" ]]
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+          remote="$DEPLOY_USER@$DEPLOY_HOST"
+          switched=false
+          restore_on_exit() {
+            if [[ "$switched" == true ]]; then
+              ssh "${ssh_args[@]}" "$remote" \
+                "sudo /usr/local/sbin/my-vpn-release rollback '$RESTORE_VERSION'" || true
+            fi
+          }
+          trap restore_on_exit EXIT
+          current="$(ssh "${ssh_args[@]}" "$remote" "sudo /usr/local/sbin/my-vpn-release current")"
+          [[ "$current" == "$RESTORE_VERSION" ]]
+          ssh "${ssh_args[@]}" "$remote" \
+            "sudo /usr/local/sbin/my-vpn-release rollback '$TARGET_VERSION'"
+          switched=true
+          [[ "$(ssh "${ssh_args[@]}" "$remote" "sudo /usr/local/sbin/my-vpn-release current")" == "$TARGET_VERSION" ]]
+          curl --fail --silent --show-error --retry 10 --retry-all-errors \
+            --retry-delay 2 --max-time 10 https://vpn.akalmaz.tech/healthz >/dev/null
+          ssh "${ssh_args[@]}" "$remote" \
+            "sudo /usr/local/sbin/my-vpn-release rollback '$RESTORE_VERSION'"
+          switched=false
+          [[ "$(ssh "${ssh_args[@]}" "$remote" "sudo /usr/local/sbin/my-vpn-release current")" == "$RESTORE_VERSION" ]]
+          curl --fail --silent --show-error --retry 10 --retry-all-errors \
+            --retry-delay 2 --max-time 10 https://vpn.akalmaz.tech/healthz >/dev/null
+          echo 'rollback drill passed and current release was restored'
+
+      - name: Remove temporary SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
