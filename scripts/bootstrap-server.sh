@@ -52,10 +52,17 @@ ssh-keygen -lf "$deploy_public_key" >/dev/null
 echo "bootstrap phase: inputs validated"
 
 had_caddy=false
+caddy_config_is_pristine=false
 if command -v caddy >/dev/null 2>&1; then
   had_caddy=true
+  packaged_caddy_md5="$(dpkg-query -W -f='${Conffiles}\n' caddy 2>/dev/null | awk '$1 == "/etc/caddy/Caddyfile" {print $2}')"
+  if [[ -n "$packaged_caddy_md5" && -f /etc/caddy/Caddyfile ]] && \
+     [[ "$(md5sum /etc/caddy/Caddyfile | awk '{print $1}')" == "$packaged_caddy_md5" ]]; then
+    caddy_config_is_pristine=true
+  fi
   if systemctl is-active --quiet caddy.service 2>/dev/null && \
-     ! grep -Eq '^[[:space:]]*import[[:space:]]+conf\.d/\*' /etc/caddy/Caddyfile; then
+     ! grep -Eq '^[[:space:]]*import[[:space:]]+conf\.d/\*' /etc/caddy/Caddyfile && \
+     [[ "$caddy_config_is_pristine" != true ]]; then
     echo "active unmanaged Caddy configuration found; refusing to overwrite it" >&2
     exit 1
   fi
@@ -203,7 +210,7 @@ echo "bootstrap phase: Xray configured"
 install -d -m 0755 -o root -g root /etc/caddy/conf.d
 install -d -m 0750 -o caddy -g caddy /var/log/caddy
 if ! grep -Eq '^[[:space:]]*import[[:space:]]+conf\.d/\*' /etc/caddy/Caddyfile; then
-  if [[ "$had_caddy" == true ]]; then
+  if [[ "$had_caddy" == true && "$caddy_config_is_pristine" != true ]]; then
     echo "existing Caddy installation lacks the managed import; refusing to replace it" >&2
     exit 1
   fi
