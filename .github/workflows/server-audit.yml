@@ -114,6 +114,11 @@ jobs:
             fi
           done
 
+          echo '== recent Caddy certificate diagnostics =='
+          sudo -n journalctl -u caddy.service --since '-15 minutes' --no-pager -n 100 \
+            | grep -E '(^-- No entries --$|certificate|challenge|issuer|tls|TLS|ACME|acme|error|failed)' \
+            | sed -E 's#/(s|activate)/[^[:space:]?]+#/[REDACTED]#g' || true
+
           echo '== relevant installed unit files =='
           systemctl list-unit-files --type=service --no-legend --no-pager \
             | awk '{print $1, $2}' \
