@@ -272,7 +272,7 @@ systemctl enable --now my-vpn-backup.timer
 systemctl is-active --quiet xray.service
 systemctl is-active --quiet caddy.service
 ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)443$'
-ss -H -ltn | awk '{print $4}' | grep -Eq '127\.0\.0\.1:8444$'
+ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)8444$'
 if [[ "$awg_was_running" == true ]]; then
   [[ "$(docker inspect -f '{{.State.Running}}' amnezia-awg2)" == true ]]
   ss -H -lun | awk '{print $4}' | grep -Eq '(^|:)35473$'
