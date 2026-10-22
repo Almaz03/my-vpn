@@ -58,7 +58,15 @@ apply_candidate() {
   jq -e '([.inbounds[] | select(.tag == "my-vpn-reality")] | length) == 1' "$candidate" >/dev/null
   chown xray:xray "$candidate"
   chmod 0640 "$candidate"
-  xray run -test -config "$candidate" >/dev/null 2>&1
+  local validation_output
+  if ! validation_output="$(xray run -test -config "$candidate" 2>&1)"; then
+    echo "Xray rejected a generated candidate configuration:" >&2
+    sed -E \
+      -e 's/[0-9a-f]{8}-[0-9a-f-]{27,36}/[REDACTED_UUID]/g' \
+      -e 's/[A-Za-z0-9_-]{32,}/[REDACTED_VALUE]/g' \
+      <<<"$validation_output" >&2
+    exit 1
+  fi
   mv -f "$candidate" "$xray_config"
   if ! systemctl restart xray.service >/dev/null || ! systemctl is-active --quiet xray.service; then
     install -m 0640 -o xray -g xray "$before" "$xray_config"
