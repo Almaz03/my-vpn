@@ -47,7 +47,7 @@ done
 deploy_public_key="$bundle_root/deploy-authorized-key.pub"
 test -s "$deploy_public_key"
 test "$(awk 'NF {count++} END {print count+0}' "$deploy_public_key")" -eq 1
-grep -Eq '^(ssh-ed25519|ssh-rsa) [A-Za-z0-9+/=]+$' "$deploy_public_key"
+awk 'NF >= 2 && ($1 == "ssh-ed25519" || $1 == "ssh-rsa") && $2 ~ /^[A-Za-z0-9+\/=]+$/ {ok=1} END {exit !ok}' "$deploy_public_key"
 ssh-keygen -lf "$deploy_public_key" >/dev/null
 echo "bootstrap phase: inputs validated"
 
@@ -120,7 +120,7 @@ install -m 0440 -o root -g root "$bundle_root/deploy/my-vpn.sudoers" /etc/sudoer
 visudo -cf /etc/sudoers.d/my-vpn
 echo "bootstrap phase: users and root-owned helpers installed"
 
-install -m 0644 -o root -g root "$deploy_public_key" /etc/my-vpn/backup-age-recipient
+awk '{print $1, $2}' "$deploy_public_key" > /etc/my-vpn/backup-age-recipient
 chown root:root /etc/my-vpn/backup-age-recipient
 chmod 0644 /etc/my-vpn/backup-age-recipient
 
