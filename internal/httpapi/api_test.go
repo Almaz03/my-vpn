@@ -160,7 +160,7 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 		t.Fatalf("subscription status=%d body=%s", response.Code, response.Body.String())
 	}
 	if response.Header().Get("Cache-Control") != "no-store, private, max-age=0" ||
-		!strings.HasPrefix(response.Header().Get("Autorouting"), "incy://autorouting/onadd/https://vpn.example.test/") ||
+		response.Header().Get("Autorouting") != "incy://autorouting/onadd/https://vpn.example.test/routing/family-ru-direct.json?v=3" ||
 		response.Header().Get("Hide-Url") != "1" {
 		t.Fatalf("unsafe subscription headers: %#v", response.Header())
 	}

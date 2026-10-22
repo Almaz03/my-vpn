@@ -322,7 +322,7 @@ func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionP
 	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
-	routingURL := s.RoutingProfileURL()
+	routingURL := s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json"}).String()
 	body := client.VLESSURI + "\nincy://autorouting/onadd/" + routingURL + "\n"
 	return SubscriptionPayload{Body: body, ExpiresAt: subscription.ExpiresAt}, nil
 }
