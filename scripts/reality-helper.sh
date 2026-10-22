@@ -94,7 +94,7 @@ case "$action" in
       uuid="$(xray uuid | tr -d '\r\n')"
       [[ "$uuid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
       before="$(mktemp /etc/xray/.config.before.XXXXXX)"
-      candidate="$(mktemp /etc/xray/.config.candidate.XXXXXX)"
+      candidate="$(mktemp --suffix=.json /etc/xray/.config.candidate.XXXXXX)"
       trap 'rm -f "$before" "$candidate"' EXIT
       cp --preserve=mode,ownership "$xray_config" "$before"
       jq --arg id "$uuid" --arg email "device-$device_id" '
@@ -125,7 +125,7 @@ case "$action" in
       exit 0
     fi
     before="$(mktemp /etc/xray/.config.before.XXXXXX)"
-    candidate="$(mktemp /etc/xray/.config.candidate.XXXXXX)"
+    candidate="$(mktemp --suffix=.json /etc/xray/.config.candidate.XXXXXX)"
     trap 'rm -f "$before" "$candidate"' EXIT
     cp --preserve=mode,ownership "$xray_config" "$before"
     jq --arg email "device-$device_id" '
