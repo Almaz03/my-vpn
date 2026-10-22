@@ -23,13 +23,24 @@ jobs:
         env:
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
         run: |
           set -euo pipefail
+          [[ "$DEPLOY_HOST" =~ ^([A-Za-z0-9.-]+|[0-9]{1,3}(\.[0-9]{1,3}){3})$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
           umask 077
           mkdir -p "$HOME/.ssh"
           printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
           printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          ssh-keygen -lf "$HOME/.ssh/known_hosts"
+          if ! ssh-keygen -lf "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+            ssh-keyscan -T 10 -p "$DEPLOY_PORT" -t ed25519 "$DEPLOY_HOST" \
+              > "$HOME/.ssh/known_hosts" 2>/dev/null
+          fi
+          expected_fingerprint='SHA256:iFmekvUNYPofSe2gynR/8KTck7d2ezQJNpA6n98Bo4c'
+          actual_fingerprints="$(ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | awk '{print $2}' | sort -u)"
+          [[ "$actual_fingerprints" == "$expected_fingerprint" ]]
+          printf 'Pinned SSH host fingerprint verified: %s\n' "$actual_fingerprints"
 
       - name: Create and download encrypted backup
         id: backup
