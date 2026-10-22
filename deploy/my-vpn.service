@@ -37,7 +37,7 @@ AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 UMask=0077
-ReadWritePaths=/var/lib/my-vpn
+ReadWritePaths=/var/lib/my-vpn /etc/xray
 
 [Install]
 WantedBy=multi-user.target

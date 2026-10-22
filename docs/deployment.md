@@ -67,7 +67,8 @@ sudo исключительно на root-owned `/usr/local/sbin/my-vpn-release`
   является осознанным исключением, поскольку он вызывает только root-owned
   `reality-helper` по узкому sudoers-правилу (Xray и backup сохраняют
   `NoNewPrivileges=true`);
-- запись только в каталог данных/backup;
+- запись только в каталог данных и `/etc/xray` для атомарной работы строго
+  ограниченного Reality helper;
 - ограничение capabilities и системных вызовов после проверки совместимости;
 - restart policy с задержкой и разумные лимиты ресурсов.
 
