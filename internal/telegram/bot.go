@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -50,12 +51,14 @@ type SystemStatus struct {
 }
 
 type Bot struct {
-	api       *apiClient
-	app       Application
-	allowlist Allowlist
-	offsets   OffsetStore
-	admins    []int64
-	sleep     func(context.Context, time.Duration) error
+	api         *apiClient
+	app         Application
+	allowlist   Allowlist
+	offsets     OffsetStore
+	admins      []int64
+	sleep       func(context.Context, time.Duration) error
+	inviteMu    sync.Mutex
+	awaitInvite map[int64]bool
 }
 
 type Config struct {
@@ -88,7 +91,10 @@ func New(config Config) (*Bot, error) {
 		return nil, err
 	}
 	admins := append([]int64(nil), config.Admins...)
-	return &Bot{api: client, app: config.Application, allowlist: allowlist, admins: admins, offsets: store, sleep: sleepContext}, nil
+	return &Bot{
+		api: client, app: config.Application, allowlist: allowlist, admins: admins,
+		offsets: store, sleep: sleepContext, awaitInvite: make(map[int64]bool),
+	}, nil
 }
 
 func (b *Bot) NotifyAccessRequest(ctx context.Context, id, relativeName, deviceName, platform string, expiresAt time.Time) error {
@@ -160,14 +166,23 @@ func (b *Bot) handleUpdate(ctx context.Context, update apiUpdate) error {
 	if !b.allowlist.Authorized(message.From.ID) {
 		return b.api.sendMessage(ctx, message.Chat.ID, "Команда недоступна.", nil)
 	}
+	if b.takeInvitePrompt(message.Chat.ID, message.Text) {
+		return b.createInvitation(ctx, message.Chat.ID, message.Text)
+	}
 	command, argument := splitCommand(message.Text)
 	switch command {
 	case "/start", "/help":
-		return b.api.sendMessage(ctx, message.Chat.ID, helpText(), nil)
+		return b.api.sendMessage(ctx, message.Chat.ID, helpText(), mainMenu())
 	case "/invite", "/new":
+		if strings.TrimSpace(argument) == "" {
+			b.setInvitePrompt(message.Chat.ID)
+			return b.api.sendMessage(ctx, message.Chat.ID, "Отправь одним сообщением:\nИмя | Устройство | 10\n\n10 — срок действия кода в минутах.", mainMenu())
+		}
 		return b.createInvitation(ctx, message.Chat.ID, argument)
 	case "/devices":
-		return b.listDevices(ctx, message.Chat.ID)
+		return b.listDevices(ctx, message.Chat.ID, false)
+	case "/revoked":
+		return b.listDevices(ctx, message.Chat.ID, true)
 	case "/revoke":
 		return b.revokeDevice(ctx, message.Chat.ID, strings.TrimSpace(argument), "")
 	case "/status":
@@ -260,15 +275,25 @@ func (b *Bot) createInvitation(ctx context.Context, chatID int64, argument strin
 	return b.api.sendMessage(ctx, chatID, message, nil)
 }
 
-func (b *Bot) listDevices(ctx context.Context, chatID int64) error {
+func (b *Bot) listDevices(ctx context.Context, chatID int64, revokedOnly bool) error {
 	devices, err := b.app.ListDevices(ctx)
 	if err != nil {
 		return b.api.sendMessage(ctx, chatID, "Не удалось получить список устройств.", nil)
 	}
-	if len(devices) == 0 {
-		return b.api.sendMessage(ctx, chatID, "Устройств пока нет.", nil)
-	}
+	filtered := make([]Device, 0, len(devices))
 	for _, device := range devices {
+		revoked := device.Revoked || device.State == "revoked"
+		if revokedOnly == revoked && (revokedOnly || device.State == "active") {
+			filtered = append(filtered, device)
+		}
+	}
+	if len(filtered) == 0 {
+		if revokedOnly {
+			return b.api.sendMessage(ctx, chatID, "Отозванных устройств нет.", nil)
+		}
+		return b.api.sendMessage(ctx, chatID, "Активных устройств пока нет.", nil)
+	}
+	for _, device := range filtered {
 		state := safeField(device.State)
 		if device.Revoked {
 			state = "revoked"
@@ -322,6 +347,16 @@ func (b *Bot) status(ctx context.Context, chatID int64) error {
 
 func splitCommand(text string) (string, string) {
 	text = strings.TrimSpace(text)
+	switch text {
+	case "📱 Активные":
+		return "/devices", ""
+	case "🗑 Отозванные":
+		return "/revoked", ""
+	case "➕ Приглашение":
+		return "/invite", ""
+	case "📊 Статус":
+		return "/status", ""
+	}
 	if text == "" {
 		return "", ""
 	}
@@ -332,7 +367,55 @@ func splitCommand(text string) (string, string) {
 }
 
 func helpText() string {
-	return "Команды:\n/invite Имя | Устройство | 10 — создать код\n/devices — список устройств\n/revoke ID — отозвать устройство\n/status — состояние сервиса"
+	return "Выбери действие кнопкой ниже.\n\nКоманды также доступны:\n/invite Имя | Устройство | 10\n/devices\n/revoked\n/revoke ID\n/status"
+}
+
+func mainMenu() *replyKeyboard {
+	return &replyKeyboard{
+		Keyboard: [][]replyButton{
+			{{Text: "📱 Активные"}, {Text: "🗑 Отозванные"}},
+			{{Text: "➕ Приглашение"}, {Text: "📊 Статус"}},
+		},
+		ResizeKeyboard: true, IsPersistent: true,
+		InputPlaceholder: "Выберите действие",
+	}
+}
+
+func (b *Bot) setInvitePrompt(chatID int64) {
+	b.inviteMu.Lock()
+	b.awaitInvite[chatID] = true
+	b.inviteMu.Unlock()
+}
+
+func (b *Bot) takeInvitePrompt(chatID int64, text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "/") {
+		return false
+	}
+	if isMenuButton(trimmed) {
+		if trimmed != "➕ Приглашение" {
+			b.inviteMu.Lock()
+			delete(b.awaitInvite, chatID)
+			b.inviteMu.Unlock()
+		}
+		return false
+	}
+	b.inviteMu.Lock()
+	defer b.inviteMu.Unlock()
+	if !b.awaitInvite[chatID] {
+		return false
+	}
+	delete(b.awaitInvite, chatID)
+	return true
+}
+
+func isMenuButton(text string) bool {
+	switch strings.TrimSpace(text) {
+	case "📱 Активные", "🗑 Отозванные", "➕ Приглашение", "📊 Статус":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateDeviceID(id string) error {

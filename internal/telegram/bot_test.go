@@ -171,6 +171,64 @@ func TestDevicesAndRevokeCallback(t *testing.T) {
 	}
 }
 
+func TestDeviceCommandsSeparateActiveAndRevoked(t *testing.T) {
+	server, requests := telegramServer(t)
+	defer server.Close()
+	app := &fakeApplication{devices: []Device{
+		{ID: "device_active_1", RelativeName: "Мама", DeviceName: "iPhone", Platform: "ios", State: "active"},
+		{ID: "device_revoked_1", RelativeName: "Папа", DeviceName: "Mac", Platform: "macos", State: "revoked", Revoked: true},
+	}}
+	bot := newTestBot(t, server, app)
+
+	for _, command := range []string{"/devices", "/revoked"} {
+		if err := bot.handleUpdate(context.Background(), apiUpdate{Message: &apiMessage{
+			From: &apiUser{ID: 42}, Chat: apiChat{ID: 42}, Text: command,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("unexpected requests: %#v", *requests)
+	}
+	activeText, _ := (*requests)[0].body["text"].(string)
+	revokedText, _ := (*requests)[1].body["text"].(string)
+	if !strings.Contains(activeText, "Мама") || strings.Contains(activeText, "Папа") {
+		t.Fatalf("active list contains wrong devices: %q", activeText)
+	}
+	if !strings.Contains(revokedText, "Папа") || strings.Contains(revokedText, "Мама") {
+		t.Fatalf("revoked list contains wrong devices: %q", revokedText)
+	}
+	if (*requests)[1].body["reply_markup"] != nil {
+		t.Fatalf("revoked device must not have actions: %#v", (*requests)[1].body)
+	}
+}
+
+func TestMenuButtonsAndInvitationPrompt(t *testing.T) {
+	server, requests := telegramServer(t)
+	defer server.Close()
+	app := &fakeApplication{invitationCode: "ABCD-EFGH"}
+	bot := newTestBot(t, server, app)
+
+	messages := []string{"/start", "➕ Приглашение", "Мама | iPhone | 10"}
+	for _, text := range messages {
+		if err := bot.handleUpdate(context.Background(), apiUpdate{Message: &apiMessage{
+			From: &apiUser{ID: 42}, Chat: apiChat{ID: 42}, Text: text,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*requests) != 3 {
+		t.Fatalf("unexpected requests: %#v", *requests)
+	}
+	menu, ok := (*requests)[0].body["reply_markup"].(map[string]any)
+	if !ok || menu["keyboard"] == nil {
+		t.Fatalf("persistent menu missing: %#v", (*requests)[0].body)
+	}
+	if app.createCalls != 1 || app.relativeName != "Мама" || app.deviceName != "iPhone" || app.ttl != 10*time.Minute {
+		t.Fatalf("unexpected invitation from button flow: %#v", app)
+	}
+}
+
 func TestAccessRequestNotificationApprovalHasCopyButton(t *testing.T) {
 	server, requests := telegramServer(t)
 	defer server.Close()

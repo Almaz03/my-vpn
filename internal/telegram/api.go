@@ -81,6 +81,17 @@ type inlineKeyboard struct {
 	InlineKeyboard [][]inlineButton `json:"inline_keyboard"`
 }
 
+type replyKeyboard struct {
+	Keyboard         [][]replyButton `json:"keyboard"`
+	ResizeKeyboard   bool            `json:"resize_keyboard"`
+	IsPersistent     bool            `json:"is_persistent"`
+	InputPlaceholder string          `json:"input_field_placeholder,omitempty"`
+}
+
+type replyButton struct {
+	Text string `json:"text"`
+}
+
 type inlineButton struct {
 	Text         string          `json:"text"`
 	CallbackData string          `json:"callback_data,omitempty"`
@@ -108,10 +119,17 @@ func (c *apiClient) getUpdates(ctx context.Context, offset int64) ([]apiUpdate, 
 	return response.Result, nil
 }
 
-func (c *apiClient) sendMessage(ctx context.Context, chatID int64, text string, keyboard *inlineKeyboard) error {
+func (c *apiClient) sendMessage(ctx context.Context, chatID int64, text string, keyboard any) error {
 	payload := map[string]any{"chat_id": chatID, "text": truncate(text), "disable_web_page_preview": true}
-	if keyboard != nil {
-		payload["reply_markup"] = keyboard
+	switch value := keyboard.(type) {
+	case *inlineKeyboard:
+		if value != nil {
+			payload["reply_markup"] = value
+		}
+	case *replyKeyboard:
+		if value != nil {
+			payload["reply_markup"] = value
+		}
 	}
 	var response apiResponse[json.RawMessage]
 	return c.call(ctx, "sendMessage", payload, &response, &response.OK)

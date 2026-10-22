@@ -177,7 +177,10 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/routing/family-ru-direct.json", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"GlobalProxy":"true"`) || !strings.Contains(response.Body.String(), "domain:ru") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"GlobalProxy":"true"`) ||
+		!strings.Contains(response.Body.String(), `"DomainStrategy":"AsIs"`) ||
+		!strings.Contains(response.Body.String(), `"LastUpdated":"1792627200"`) ||
+		!strings.Contains(response.Body.String(), "domain:ru") || strings.Contains(response.Body.String(), "geoip:ru") {
 		t.Fatalf("routing status=%d body=%s", response.Code, response.Body.String())
 	}
 }

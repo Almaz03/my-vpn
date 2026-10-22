@@ -67,7 +67,7 @@ subscription_path="/${subscription#https://vpn.akalmaz.tech/}"
 printf 'url = "http://127.0.0.1:8080%s"\n' "$subscription_path" |
   curl --fail --silent --show-error --config - > "$work/subscription.txt"
 grep -Eq '^vless://[^[:space:]]+$' "$work/subscription.txt"
-grep -Fxq 'incy://autorouting/onadd/https://vpn.akalmaz.tech/routing/family-ru-direct.json' "$work/subscription.txt"
+grep -Fxq 'incy://autorouting/onadd/https://vpn.akalmaz.tech/routing/family-ru-direct.json?v=3' "$work/subscription.txt"
 
 admin_request POST "/api/v1/admin/devices/$device_id/revoke" > "$work/revoke.json"
 device_id=""
