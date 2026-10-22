@@ -66,8 +66,21 @@ subscription_path="/${subscription#https://vpn.akalmaz.tech/}"
 
 printf 'url = "http://127.0.0.1:8080%s"\n' "$subscription_path" |
   curl --fail --silent --show-error --config - > "$work/subscription.txt"
-grep -Eq '^vless://[^[:space:]]+$' "$work/subscription.txt"
-grep -Fxq 'incy://autorouting/onadd/https://vpn.akalmaz.tech/routing/family-ru-direct.json' "$work/subscription.txt"
+if jq -e '
+  (.remarks == "Family VPN") and
+  (.dns.queryStrategy == "UseIPv4") and
+  ([.inbounds[]? | select(.protocol == "socks" and .port == 10808)] | length == 1) and
+  ([.outbounds[]? | select(.tag == "family-proxy" and .protocol == "vless")] | length == 1) and
+  ([.outbounds[]? | select(.tag == "direct" and .protocol == "freedom")] | length == 1) and
+  ([.outbounds[]? | select(.tag == "block" and .protocol == "blackhole")] | length == 1) and
+  ([.routing.rules[]? | select(.outboundTag == "family-proxy" and .network == "tcp,udp")] | length == 1)
+' "$work/subscription.txt" >/dev/null 2>&1; then
+  echo "application canary: full Xray subscription validated"
+else
+  grep -Eq '^vless://[^[:space:]]+$' "$work/subscription.txt"
+  grep -Fxq 'incy://autorouting/onadd/https://vpn.akalmaz.tech/routing/family-ru-direct.json' "$work/subscription.txt"
+  echo "application canary: legacy VLESS subscription validated"
+fi
 
 admin_request POST "/api/v1/admin/devices/$device_id/revoke" > "$work/revoke.json"
 device_id=""
