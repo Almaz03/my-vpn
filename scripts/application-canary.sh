@@ -13,6 +13,8 @@ work="$(mktemp -d /var/lib/my-vpn/.application-canary.XXXXXX)"
 chmod 0700 "$work"
 invitation_id=""
 device_id=""
+client_pid=""
+client_work=""
 
 admin_request() {
   local method="$1" path="$2" body_file="${3:-}"
@@ -34,10 +36,17 @@ admin_request() {
 cleanup() {
   status=$?
   trap - EXIT INT TERM
+  if [[ -n "$client_pid" ]]; then
+    kill "$client_pid" >/dev/null 2>&1 || true
+    wait "$client_pid" >/dev/null 2>&1 || true
+  fi
   if [[ -n "$device_id" ]]; then
     admin_request POST "/api/v1/admin/devices/$device_id/revoke" >/dev/null 2>&1 || true
   elif [[ -n "$invitation_id" ]]; then
     admin_request POST "/api/v1/admin/invitations/$invitation_id/revoke" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$client_work" ]]; then
+    rm -rf "$client_work"
   fi
   rm -rf "$work"
   exit "$status"
@@ -76,6 +85,49 @@ if jq -e '
   ([.routing.rules[]? | select(.outboundTag == "family-proxy" and .network == "tcp,udp")] | length == 1)
 ' "$work/subscription.txt" >/dev/null 2>&1; then
   echo "application canary: full Xray subscription validated"
+
+  client_work="$(mktemp -d /var/lib/xray/.application-canary.XXXXXX)"
+  socks_port=18150
+  while ss -H -ltn "sport = :$socks_port" | grep -q .; do
+    ((socks_port++))
+    ((socks_port < 18200))
+  done
+  http_port=$((socks_port + 50))
+  while ss -H -ltn "sport = :$http_port" | grep -q .; do
+    ((http_port++))
+    ((http_port < 18300))
+  done
+  jq --argjson socks_port "$socks_port" --argjson http_port "$http_port" '
+    (.inbounds[] | select(.protocol == "socks") | .port) = $socks_port |
+    (.inbounds[] | select(.protocol == "http") | .port) = $http_port |
+    (.outbounds[] | select(.tag == "family-proxy") | .settings.vnext[0].address) = "127.0.0.1"
+  ' "$work/subscription.txt" > "$client_work/config.json"
+  chown -R xray:xray "$client_work"
+  chmod 0750 "$client_work"
+  chmod 0600 "$client_work/config.json"
+  runuser -u xray -- /usr/local/bin/xray run -config "$client_work/config.json" \
+    >"$client_work/xray.log" 2>&1 &
+  client_pid=$!
+  ready=false
+  for _ in {1..20}; do
+    if ss -H -ltn "sport = :$socks_port" | grep -q .; then
+      ready=true
+      break
+    fi
+    sleep 0.25
+  done
+  [[ "$ready" == true ]]
+  curl --fail --silent --show-error --max-time 15 \
+    --proxy "socks5h://127.0.0.1:$socks_port" \
+    --output "$client_work/trace.txt" \
+    https://www.cloudflare.com/cdn-cgi/trace
+  grep -Eq '^ip=[0-9a-fA-F:.]+$' "$client_work/trace.txt"
+  kill "$client_pid" >/dev/null 2>&1 || true
+  wait "$client_pid" >/dev/null 2>&1 || true
+  client_pid=""
+  rm -rf "$client_work"
+  client_work=""
+  echo "application canary: full Xray foreign egress passed"
 else
   grep -Eq '^vless://[^[:space:]]+$' "$work/subscription.txt"
   grep -Fxq 'incy://autorouting/onadd/https://vpn.akalmaz.tech/routing/family-ru-direct.json' "$work/subscription.txt"

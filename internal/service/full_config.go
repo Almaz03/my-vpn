@@ -81,10 +81,11 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 					"users": []any{map[string]any{"id": uuid, "encryption": "none", "flow": flow}},
 				}}},
 				"streamSettings": map[string]any{
-					"network": "tcp", "security": "reality",
+					"network": "raw", "security": "reality",
 					"realitySettings": map[string]any{
+						"show":        false,
 						"fingerprint": fingerprint, "serverName": serverName,
-						"publicKey": publicKey, "shortId": shortID, "spiderX": "",
+						"publicKey": publicKey, "shortId": shortID, "spiderX": "/",
 					},
 				},
 				"mux": map[string]any{"enabled": false},
