@@ -20,54 +20,13 @@
 
       <section class="card" id="activation-panel" aria-labelledby="activation-title">
         <div class="eyebrow">Новое устройство</div>
-        <h1 id="activation-title">Подключитесь по приглашению</h1>
-        <p class="lead">Введите короткий код, который вам передал администратор семьи. Он действует ограниченное время и только один раз.</p>
+        <h1 id="activation-title">Подключить устройство</h1>
+        <p class="lead">Сначала запросите доступ у администратора. Если код уже есть, введите его сразу ниже.</p>
 
-        <form id="activation-form" novalidate>
-          <label for="invite-code">Код приглашения</label>
-          <div class="code-row">
-            <input
-              id="invite-code"
-              name="invite-code"
-              type="text"
-              inputmode="text"
-              autocomplete="one-time-code"
-              autocapitalize="characters"
-              spellcheck="false"
-              minlength="4"
-              maxlength="16"
-              pattern="[A-Za-z0-9-]{4,16}"
-              aria-describedby="code-hint"
-              required
-            >
-            <button class="primary" type="submit" id="submit-button">Продолжить</button>
-          </div>
-          <p class="hint" id="code-hint">Можно вводить с дефисом. Код не сохраняется в браузере.</p>
-
-          <div class="device-row">
-            <span>Ваше устройство</span>
-            <strong id="platform-label">Определяем…</strong>
-            <button class="link-button" type="button" id="change-platform" aria-expanded="false" aria-controls="platform-picker">Изменить</button>
-          </div>
-
-          <fieldset id="platform-picker" class="platform-picker" hidden>
-            <legend>Выберите платформу</legend>
-            <div class="platform-grid">
-              <label><input type="radio" name="platform" value="android"> Android</label>
-              <label><input type="radio" name="platform" value="ios"> iPhone / iPad</label>
-              <label><input type="radio" name="platform" value="windows"> Windows</label>
-              <label><input type="radio" name="platform" value="macos"> macOS</label>
-              <label><input type="radio" name="platform" value="linux"> Linux</label>
-            </div>
-          </fieldset>
-        </form>
-
-        <div id="status" class="status" role="status" aria-live="polite" hidden></div>
-
-        <div class="alternative-access">
+        <div class="primary-access">
           <button class="request-access-button" type="button" id="show-request-form" aria-expanded="false" aria-controls="access-request-panel">
             <span class="request-access-button__title">Запросить доступ</span>
-            <span class="request-access-button__hint">Нет кода? Отправьте запрос администратору</span>
+            <span class="request-access-button__hint">Администратор получит запрос в Telegram</span>
           </button>
         </div>
 
@@ -93,6 +52,52 @@
             </div>
             <p class="hint" id="approved-code-expiry"></p>
           </div>
+        </section>
+
+        <section class="code-access" aria-labelledby="code-access-title">
+          <h2 id="code-access-title">Уже есть код? Введите сразу</h2>
+          <p class="hint">Код действует ограниченное время и используется только один раз.</p>
+
+          <form id="activation-form" novalidate>
+            <label for="invite-code">Код приглашения</label>
+            <div class="code-row">
+              <input
+                id="invite-code"
+                name="invite-code"
+                type="text"
+                inputmode="text"
+                autocomplete="one-time-code"
+                autocapitalize="characters"
+                spellcheck="false"
+                minlength="4"
+                maxlength="16"
+                pattern="[A-Za-z0-9-]{4,16}"
+                aria-describedby="code-hint"
+                required
+              >
+              <button class="primary" type="submit" id="submit-button">Продолжить</button>
+            </div>
+            <p class="hint" id="code-hint">Можно вводить с дефисом. Код не сохраняется в браузере.</p>
+
+            <div class="device-row">
+              <span>Ваше устройство</span>
+              <strong id="platform-label">Определяем…</strong>
+              <button class="link-button" type="button" id="change-platform" aria-expanded="false" aria-controls="platform-picker">Изменить</button>
+            </div>
+
+            <fieldset id="platform-picker" class="platform-picker" hidden>
+              <legend>Выберите платформу</legend>
+              <div class="platform-grid">
+                <label><input type="radio" name="platform" value="android"> Android</label>
+                <label><input type="radio" name="platform" value="ios"> iPhone / iPad</label>
+                <label><input type="radio" name="platform" value="windows"> Windows</label>
+                <label><input type="radio" name="platform" value="macos"> macOS</label>
+                <label><input type="radio" name="platform" value="linux"> Linux</label>
+              </div>
+            </fieldset>
+          </form>
+
+          <div id="status" class="status" role="status" aria-live="polite" hidden></div>
         </section>
       </section>
 
