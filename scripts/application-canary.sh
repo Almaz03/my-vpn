@@ -71,6 +71,18 @@ for field in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do
   grep -Eq "^${field} = -?[0-9]+$" "$work/profile.conf"
 done
 
+# A syntactically valid profile is not enough: the server must register the
+# public key derived from this client's private key. This guards against
+# accidentally reading the server PublicKey from the [Peer] section.
+client_private_key="$(sed -n 's/^PrivateKey = //p' "$work/profile.conf" | head -n 1)"
+client_public_key="$(printf '%s\n' "$client_private_key" |
+  docker exec -i amnezia-awg2 awg pubkey)"
+[[ "$client_public_key" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]]
+docker exec amnezia-awg2 awg show awg0 peers |
+  grep -Fxq "$client_public_key"
+docker exec amnezia-awg2 grep -Fq \
+  "PublicKey = $client_public_key" /opt/amnezia/awg/awg0.conf
+
 admin_request POST "/api/v1/admin/devices/$device_id/revoke" > "$work/revoke.json"
 device_id=""
 http_code="$(printf 'url = "http://127.0.0.1:8080%s"\n' "$subscription_path" |

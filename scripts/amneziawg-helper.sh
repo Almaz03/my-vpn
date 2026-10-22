@@ -59,7 +59,13 @@ require_data_plane() {
   docker exec "$container" test -f "$server_config"
 }
 
-profile_public_key() { sed -n 's/^PublicKey = //p' "$1" | head -n 1; }
+profile_private_key() { sed -n 's/^PrivateKey = //p' "$1" | head -n 1; }
+profile_public_key() {
+  local private_key
+  private_key="$(profile_private_key "$1")"
+  validate_key "$private_key"
+  printf '%s\n' "$private_key" | docker exec -i "$container" awg pubkey
+}
 profile_psk() { sed -n 's/^PresharedKey = //p' "$1" | head -n 1; }
 profile_address() { sed -n 's/^Address = //p' "$1" | head -n 1; }
 
@@ -218,6 +224,7 @@ case "$action" in
     device_id="$(device_from_credential "$credential")"
     profile="$state_dir/$device_id.conf"
     [[ -f "$profile" && ! -L "$profile" ]]
+    rewrite_server_peer add "$profile"
     apply_runtime_peer "$profile"
     jq -cn --rawfile config "$profile" '{version:1,config:$config}'
     ;;
