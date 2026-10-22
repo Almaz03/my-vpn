@@ -51,6 +51,14 @@ jobs:
         run: |
           set -euo pipefail
           test -s web/index.html
+          python3 - <<'PY'
+          import ipaddress, json
+          with open("web/ru-direct.json", encoding="utf-8") as source:
+              routes = json.load(source)
+          assert 1 <= len(routes) <= 250
+          assert all(item.get("hostname") and item.get("ips") for item in routes)
+          assert all(ipaddress.ip_address(ip).version == 4 for item in routes for ip in item["ips"])
+          PY
           while IFS= read -r -d '' file; do
             node --check "$file"
           done < <(find web -type f -name '*.js' -print0)

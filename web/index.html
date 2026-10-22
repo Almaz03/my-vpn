@@ -143,6 +143,20 @@
         </aside>
       </section>
 
+      <section class="card routing" aria-labelledby="routing-title">
+        <div class="eyebrow">Без переключения VPN</div>
+        <h2 id="routing-title">Российские сайты напрямую</h2>
+        <p class="lead">Импортируйте компактный список один раз: основные российские сервисы будут открываться с вашего обычного IP, а остальной интернет — через VPN.</p>
+        <a class="primary button routing-download" href="/ru-direct.json" download="amnezia-ru-direct.json">Скачать список для AmneziaVPN</a>
+        <ol class="routing-steps">
+          <li>Отключите VPN и нажмите <strong>Split tunneling disabled</strong>.</li>
+          <li>Откройте <strong>Site-based split tunneling</strong>, включите его и выберите <strong>Directly</strong>.</li>
+          <li>В меню дополнительных действий выберите <strong>Replace site list</strong> и импортируйте скачанный JSON.</li>
+          <li>Подключите VPN — дальше маршрутизация работает автоматически.</li>
+        </ol>
+        <aside class="routing-note">Полный реестр РФ содержит тысячи маршрутов и ломает сетевое расширение AmneziaVPN на iPhone. Поэтому здесь только компактный безопасный список популярных сервисов; он не содержит ключей VPN.</aside>
+      </section>
+
       <section class="card help" aria-labelledby="help-title">
         <h2 id="help-title">Если не получается</h2>
         <details>

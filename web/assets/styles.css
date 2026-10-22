@@ -210,6 +210,11 @@ input[type="text"]:focus, button:focus-visible, a:focus-visible, summary:focus-v
 
 .notice { display: flex; gap: 10px; margin-top: 22px; padding: 14px; border-radius: 12px; color: #5d4913; background: var(--warning-soft); font-size: 0.86rem; line-height: 1.45; }
 .routing-note { margin-top: 12px; padding: 14px; border-radius: 12px; color: var(--accent-strong); background: var(--accent-soft); font-size: 0.86rem; line-height: 1.5; }
+.routing .lead { margin-bottom: 20px; }
+.routing-download { display: flex; align-items: center; justify-content: center; width: 100%; padding: 0 20px; text-align: center; text-decoration: none; }
+.routing-steps { margin: 22px 0 0; padding-left: 1.35rem; color: var(--muted); line-height: 1.55; }
+.routing-steps li + li { margin-top: 9px; }
+.routing-steps strong { color: var(--text); }
 
 .admin-shell { width: min(1040px, calc(100% - 32px)); }
 .admin-grid { display: grid; grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr); gap: 18px; }
