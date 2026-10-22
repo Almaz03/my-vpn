@@ -30,7 +30,7 @@ for path in "$artifact" "$checksum" "$runtime_env"; do
   test -f "$path" -a ! -L "$path"
 done
 test -x /usr/local/sbin/my-vpn-release
-test -f /etc/my-vpn/xray-client.env
+test -f /etc/my-vpn/amneziawg.env
 test -f /etc/systemd/system/my-vpn.service
 test -f /etc/caddy/conf.d/my-vpn.caddy
 
@@ -129,7 +129,7 @@ grep -Fxq 'APP_LISTEN=127.0.0.1:8080' "$new_env"
 grep -Fxq 'APP_DB_PATH=/var/lib/my-vpn/my-vpn.db' "$new_env"
 grep -Fxq 'PUBLIC_BASE_URL=https://vpn.akalmaz.tech' "$new_env"
 grep -Fxq 'WEB_ROOT=/opt/my-vpn/current/web' "$new_env"
-grep -Fxq 'PROVISIONER_MODE=vless-reality' "$new_env"
+grep -Fxq 'PROVISIONER_MODE=amneziawg' "$new_env"
 
 preserve_or_generate() {
   local name="$1"

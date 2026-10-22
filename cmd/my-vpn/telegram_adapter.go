@@ -73,6 +73,6 @@ func (a telegramAdapter) SystemStatus(ctx context.Context) (telegram.SystemStatu
 	return telegram.SystemStatus{
 		Portal: "ok", VPN: a.provisionerMode, Certificate: "Caddy auto-TLS",
 		CPU: fmt.Sprintf("%d vCPU", runtime.NumCPU()), Memory: fmt.Sprintf("%.1f MiB app", float64(memory.Alloc)/(1<<20)),
-		Disk: disk, Network: "портал и Reality 443/tcp",
+		Disk: disk, Network: "портал 443/tcp; AmneziaWG 35473/udp",
 	}, nil
 }

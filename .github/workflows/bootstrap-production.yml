@@ -46,10 +46,10 @@ jobs:
           mkdir -p "$bundle/scripts" "$bundle/deploy"
           cp scripts/bootstrap-server.sh scripts/install-release.sh scripts/rollback.sh \
             scripts/deactivate-release.sh scripts/backup.sh scripts/restore-backup.sh \
-            scripts/release-helper.sh scripts/reality-helper.sh scripts/reality-canary.sh \
+            scripts/release-helper.sh scripts/amneziawg-helper.sh \
             scripts/application-canary.sh "$bundle/scripts/"
           cp deploy/Caddyfile deploy/my-vpn.service deploy/my-vpn-backup.service \
-            deploy/my-vpn-backup.timer deploy/xray.service deploy/my-vpn.sudoers \
+            deploy/my-vpn-backup.timer deploy/my-vpn.sudoers \
             "$bundle/deploy/"
           ssh-keygen -y -f "$HOME/.ssh/deploy_key" > "$bundle/deploy-authorized-key.pub"
           ssh-keygen -lf "$bundle/deploy-authorized-key.pub"

@@ -80,7 +80,7 @@ jobs:
     if: >-
       (github.event_name == 'push' &&
        vars.ENABLE_PRODUCTION_DEPLOY == 'true' &&
-       vars.PROVISIONER_MODE == 'vless-reality') ||
+       vars.PROVISIONER_MODE == 'amneziawg') ||
       (github.event_name == 'workflow_dispatch' && inputs.deploy)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -113,17 +113,19 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ADMIN_IDS: ${{ secrets.TELEGRAM_ADMIN_IDS }}
+          PROVISIONER_MODE: ${{ vars.PROVISIONER_MODE }}
         run: |
           set -euo pipefail
           [[ "$TELEGRAM_BOT_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
           [[ "$TELEGRAM_ADMIN_IDS" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]
+          [[ "$PROVISIONER_MODE" == amneziawg ]]
           umask 077
           {
             printf 'APP_LISTEN=127.0.0.1:8080\n'
             printf 'APP_DB_PATH=/var/lib/my-vpn/my-vpn.db\n'
             printf 'PUBLIC_BASE_URL=https://vpn.akalmaz.tech\n'
             printf 'WEB_ROOT=/opt/my-vpn/current/web\n'
-            printf 'PROVISIONER_MODE=vless-reality\n'
+            printf 'PROVISIONER_MODE=%s\n' "$PROVISIONER_MODE"
             printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
             printf 'TELEGRAM_ADMIN_IDS=%s\n' "$TELEGRAM_ADMIN_IDS"
           } > "$RUNNER_TEMP/runtime.env"
@@ -176,7 +178,7 @@ jobs:
             exit 1
           fi
 
-      - name: Public portal and Reality canary
+      - name: Public portal and AmneziaWG canary
         id: public_smoke
         continue-on-error: true
         shell: bash

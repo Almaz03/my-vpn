@@ -8,7 +8,6 @@ Type=simple
 User=my-vpn
 Group=my-vpn
 EnvironmentFile=/etc/my-vpn/my-vpn.env
-EnvironmentFile=/etc/my-vpn/xray-client.env
 ExecStart=/opt/my-vpn/current/my-vpn
 WorkingDirectory=/opt/my-vpn/current
 Restart=on-failure
@@ -17,7 +16,7 @@ TimeoutStartSec=30s
 TimeoutStopSec=15s
 
 # The unprivileged service may elevate only through the root-owned
-# reality-helper command allowed by /etc/sudoers.d/my-vpn.
+# narrowly scoped provisioning helpers allowed by /etc/sudoers.d/my-vpn.
 NoNewPrivileges=false
 PrivateTmp=true
 PrivateDevices=true
@@ -39,7 +38,7 @@ AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 UMask=0077
-ReadWritePaths=/var/lib/my-vpn /etc/xray
+ReadWritePaths=/var/lib/my-vpn
 
 [Install]
 WantedBy=multi-user.target

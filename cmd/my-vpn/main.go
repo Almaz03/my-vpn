@@ -36,8 +36,8 @@ func main() {
 	switch configuration.ProvisionerMode {
 	case "noop":
 		deviceProvisioner = provision.Noop{}
-	case "vless-reality":
-		deviceProvisioner = provision.NewReality()
+	case "amneziawg":
+		deviceProvisioner = provision.NewAmneziaWG()
 	default:
 		logger.Error("unsupported provisioner mode")
 		os.Exit(1)
