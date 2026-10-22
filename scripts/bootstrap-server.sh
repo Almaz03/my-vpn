@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'status=$?; echo "bootstrap failed at line $LINENO" >&2; exit "$status"' ERR
 
 if [[ "$EUID" -ne 0 ]]; then
   echo "bootstrap-server.sh must run as root" >&2
@@ -48,6 +49,7 @@ test -s "$deploy_public_key"
 test "$(awk 'NF {count++} END {print count+0}' "$deploy_public_key")" -eq 1
 grep -Eq '^(ssh-ed25519|ssh-rsa) [A-Za-z0-9+/=]+$' "$deploy_public_key"
 ssh-keygen -lf "$deploy_public_key" >/dev/null
+echo "bootstrap phase: inputs validated"
 
 had_caddy=false
 if command -v caddy >/dev/null 2>&1; then
@@ -63,6 +65,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install --yes --no-install-recommends \
   age ca-certificates caddy curl jq openssl sqlite3 sudo ufw unzip
+echo "bootstrap phase: packages installed"
 
 for user_spec in "$app_user:/var/lib/my-vpn:/usr/sbin/nologin" "$xray_user:/var/lib/xray:/usr/sbin/nologin"; do
   user_name="${user_spec%%:*}"
@@ -115,6 +118,7 @@ install -m 0644 -o root -g root "$bundle_root/deploy/my-vpn-backup.timer" /etc/s
 install -m 0644 -o root -g root "$bundle_root/deploy/xray.service" /etc/systemd/system/xray.service
 install -m 0440 -o root -g root "$bundle_root/deploy/my-vpn.sudoers" /etc/sudoers.d/my-vpn
 visudo -cf /etc/sudoers.d/my-vpn
+echo "bootstrap phase: users and root-owned helpers installed"
 
 install -m 0644 -o root -g root "$deploy_public_key" /etc/my-vpn/backup-age-recipient
 chown root:root /etc/my-vpn/backup-age-recipient
@@ -191,6 +195,7 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
 fi
 test -f /etc/my-vpn/xray-client.env
 /usr/local/bin/xray run -test -config /etc/xray/config.json >/dev/null
+echo "bootstrap phase: Xray configured"
 
 install -d -m 0755 -o root -g root /etc/caddy/conf.d
 install -d -m 0750 -o caddy -g caddy /var/log/caddy
@@ -204,6 +209,7 @@ if ! grep -Eq '^[[:space:]]*import[[:space:]]+conf\.d/\*' /etc/caddy/Caddyfile; 
 fi
 install -m 0644 -o root -g root "$bundle_root/deploy/Caddyfile" /etc/caddy/conf.d/my-vpn.caddy
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+echo "bootstrap phase: Caddy configured"
 
 awg_was_running=false
 if command -v docker >/dev/null 2>&1 && \
@@ -226,6 +232,7 @@ fi
 ufw default deny incoming
 ufw default allow outgoing
 ufw --force enable
+echo "bootstrap phase: firewall enabled"
 
 systemctl daemon-reload
 systemctl enable --now xray.service
