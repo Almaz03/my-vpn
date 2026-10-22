@@ -180,9 +180,12 @@ func TestRevokeFailureRemainsPendingAndRetryCompletes(t *testing.T) {
 	if err != nil || revoked.State != "revoked" || revoked.RevokedAt == nil {
 		t.Fatalf("revoked=%#v err=%v", revoked, err)
 	}
-	idempotent, err := application.Revoke(context.Background(), activation.Device.ID)
-	if err != nil || idempotent.State != "revoked" {
-		t.Fatalf("idempotent=%#v err=%v", idempotent, err)
+	if _, err := application.Revoke(context.Background(), activation.Device.ID); !errors.Is(err, store.ErrDeviceNotFound) {
+		t.Fatalf("deleted device revoke error=%v", err)
+	}
+	devices, err := application.ListDevices(context.Background())
+	if err != nil || len(devices) != 0 {
+		t.Fatalf("devices after revoke=%d err=%v", len(devices), err)
 	}
 }
 

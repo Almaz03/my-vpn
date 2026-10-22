@@ -111,6 +111,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate sqlite: %w", err)
 	}
+	// Revoked devices have already been removed from the VPN data plane. Keep
+	// the audit event, but do not retain stale device or subscription rows.
+	if _, err := db.Exec(`DELETE FROM devices WHERE state = 'revoked'`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("purge revoked devices: %w", err)
+	}
 	return &Store{db: db, now: time.Now}, nil
 }
 
@@ -826,18 +832,14 @@ func (s *Store) CompleteDeviceRevoke(ctx context.Context, id string) (Device, er
 		return device, tx.Commit()
 	}
 	now := s.now().UTC().Truncate(time.Second)
-	if _, err := tx.ExecContext(ctx, `UPDATE devices SET state = 'revoked', revoked_at = ? WHERE id = ?`, now.Unix(), id); err != nil {
-		return Device{}, fmt.Errorf("complete device revoke: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE subscription_tokens SET revoked_at = ?
-		WHERE device_id = ? AND revoked_at IS NULL`, now.Unix(), id); err != nil {
-		return Device{}, fmt.Errorf("revoke device subscriptions: %w", err)
-	}
 	device.RevokedAt = &now
 	device.State = "revoked"
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(event_type, subject_id, detail, created_at)
 		VALUES('device.revoked', ?, '', ?)`, id, now.Unix()); err != nil {
 		return Device{}, fmt.Errorf("audit device revoke: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE id = ?`, id); err != nil {
+		return Device{}, fmt.Errorf("delete revoked device: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return Device{}, err

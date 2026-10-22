@@ -134,9 +134,56 @@ func TestRevokePendingDoesNotSetRevokedAtAndCanRetry(t *testing.T) {
 	if err != nil || revoked.State != "revoked" || revoked.RevokedAt == nil {
 		t.Fatalf("revoked=%#v err=%v", revoked, err)
 	}
-	idempotent, complete, err := database.BeginDeviceRevoke(context.Background(), device.ID)
-	if err != nil || !complete || idempotent.State != "revoked" {
-		t.Fatalf("idempotent=%#v complete=%v err=%v", idempotent, complete, err)
+	if _, _, err := database.BeginDeviceRevoke(context.Background(), device.ID); !errors.Is(err, ErrDeviceNotFound) {
+		t.Fatalf("deleted device lookup error=%v", err)
+	}
+	devices, err := database.ListDevices(context.Background())
+	if err != nil || len(devices) != 0 {
+		t.Fatalf("devices after revoke=%d err=%v", len(devices), err)
+	}
+}
+
+func TestOpenPurgesLegacyRevokedDevicesAndSubscriptions(t *testing.T) {
+	path := t.TempDir() + "/test.db"
+	database, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := bytes.Repeat([]byte{12}, 32)
+	if _, err := database.CreateInvitation(context.Background(), hash, "Семья", "Старый телефон", time.Now().Add(time.Hour), 5); err != nil {
+		t.Fatal(err)
+	}
+	device, err := database.ConsumeInvitation(context.Background(), hash, "android", "", "ip-hmac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateProvisioned(context.Background(), device.ID, "vless-reality:"+device.ID, "active"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.IssueSubscription(context.Background(), bytes.Repeat([]byte{13}, 32), device.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.Exec(`UPDATE devices SET state = 'revoked', revoked_at = ? WHERE id = ?`, time.Now().Unix(), device.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var devices, subscriptions int
+	if err := database.db.QueryRow(`SELECT COUNT(*) FROM devices`).Scan(&devices); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.db.QueryRow(`SELECT COUNT(*) FROM subscription_tokens`).Scan(&subscriptions); err != nil {
+		t.Fatal(err)
+	}
+	if devices != 0 || subscriptions != 0 {
+		t.Fatalf("devices=%d subscriptions=%d", devices, subscriptions)
 	}
 }
 
