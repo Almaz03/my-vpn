@@ -69,7 +69,8 @@ sudo исключительно на root-owned `/usr/local/sbin/my-vpn-release`
   `NoNewPrivileges=true`);
 - запись только в каталог данных и `/etc/xray` для атомарной работы строго
   ограниченного Reality helper;
-- ограничение capabilities и системных вызовов после проверки совместимости;
+- пустые ambient/effective capabilities у приложения; bounding set содержит
+  только capabilities, необходимые root-helper после sudoers-перехода;
 - restart policy с задержкой и разумные лимиты ресурсов.
 
 Caddyfile и unit-файлы проверяются штатными валидаторами. One-time bootstrap
