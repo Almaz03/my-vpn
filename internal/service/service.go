@@ -328,7 +328,7 @@ func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionP
 }
 
 func (s *Service) RoutingProfileURL() string {
-	return s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json", RawQuery: "v=3"}).String()
+	return s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json", RawQuery: "v=4"}).String()
 }
 
 func (s *Service) SubscriptionDeepLink(token string) string {
@@ -340,11 +340,11 @@ func (s *Service) RoutingProfile() RoutingProfile {
 	geoIP := s.baseURL.ResolveReference(&url.URL{Path: "/routing/geoip.dat"}).String()
 	geosite := s.baseURL.ResolveReference(&url.URL{Path: "/routing/geosite.dat"}).String()
 	return RoutingProfile{
-		Name: "Family RU Direct", LastUpdated: "1792627200", GlobalProxy: "true",
-		RemoteDNSType: "DoH", RemoteDNSDomain: "https://cloudflare-dns.com/dns-query", RemoteDNSIP: "1.1.1.1",
+		Name: "Family RU Direct", LastUpdated: "1792686559", GlobalProxy: "true",
+		RemoteDNSType: "DoU", RemoteDNSDomain: "", RemoteDNSIP: "1.1.1.1",
 		DomesticDNSType: "DoH", DomesticDNSDomain: "https://common.dot.dns.yandex.net/dns-query", DomesticDNSIP: "77.88.8.8",
 		GeoIPURL: geoIP, GeositeURL: geosite,
-		DNSHosts:    map[string]string{"cloudflare-dns.com": "1.1.1.1", "common.dot.dns.yandex.net": "77.88.8.8"},
+		DNSHosts:    map[string]string{"common.dot.dns.yandex.net": "77.88.8.8"},
 		DirectSites: []string{"domain:ru", "domain:xn--p1ai", "domain:gosuslugi.ru", "domain:nalog.gov.ru", "domain:mos.ru", "domain:sberbank.ru", "domain:tbank.ru", "domain:alfabank.ru", "domain:ozon.ru", "domain:wildberries.ru"},
 		DirectIP:    []string{"geoip:private", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8"},
 		ProxySites:  []string{}, ProxyIP: []string{}, BlockSites: []string{}, BlockIP: []string{},
