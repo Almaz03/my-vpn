@@ -160,7 +160,7 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 		t.Fatalf("subscription status=%d body=%s", response.Code, response.Body.String())
 	}
 	if response.Header().Get("Cache-Control") != "no-store, private, max-age=0" ||
-		response.Header().Get("Autorouting") != "incy://autorouting/onadd/https://vpn.example.test/routing/family-ru-direct.json?v=4" ||
+		response.Header().Get("Autorouting") != "incy://autorouting/onadd/https://vpn.example.test/routing/family-ru-direct.json?v=5" ||
 		response.Header().Get("Hide-Url") != "1" {
 		t.Fatalf("unsafe subscription headers: %#v", response.Header())
 	}
@@ -179,8 +179,10 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/routing/family-ru-direct.json", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"GlobalProxy":"true"`) ||
 		!strings.Contains(response.Body.String(), `"DomainStrategy":"AsIs"`) ||
-		!strings.Contains(response.Body.String(), `"LastUpdated":"1792686559"`) ||
+		!strings.Contains(response.Body.String(), `"LastUpdated":"1792687260"`) ||
 		!strings.Contains(response.Body.String(), `"RemoteDNSType":"DoU"`) ||
+		!strings.Contains(response.Body.String(), `"RemoteDNSIP":"8.8.8.8"`) ||
+		!strings.Contains(response.Body.String(), `"DomesticDNSType":"DoU"`) ||
 		!strings.Contains(response.Body.String(), "domain:ru") || strings.Contains(response.Body.String(), "geoip:ru") {
 		t.Fatalf("routing status=%d body=%s", response.Code, response.Body.String())
 	}
