@@ -68,6 +68,8 @@ Web-сервис запускается отдельным пользовате�
 ```ini
 User=myvpn
 Group=myvpn
+# Для обычных сервисов yes. Portal использует false только для строго
+# разрешённого root-owned reality-helper через sudoers.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

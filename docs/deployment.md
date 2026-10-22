@@ -63,7 +63,10 @@ sudo исключительно на root-owned `/usr/local/sbin/my-vpn-release`
 `my-vpn.service` должен слушать loopback (например, `127.0.0.1:8080`). Caddy завершает TLS на 80/443 и проксирует только к loopback. Проект устанавливает отдельный snippet `/etc/caddy/conf.d/my-vpn.caddy`, но не должен самовольно переписывать основной Caddyfile. В unit рекомендуется включить:
 
 - отдельного непривилегированного пользователя;
-- `NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=strict`;
+- `PrivateTmp=true`, `ProtectSystem=strict`; для портала `NoNewPrivileges=false`
+  является осознанным исключением, поскольку он вызывает только root-owned
+  `reality-helper` по узкому sudoers-правилу (Xray и backup сохраняют
+  `NoNewPrivileges=true`);
 - запись только в каталог данных/backup;
 - ограничение capabilities и системных вызовов после проверки совместимости;
 - restart policy с задержкой и разумные лимиты ресурсов.

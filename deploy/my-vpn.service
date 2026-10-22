@@ -16,7 +16,9 @@ RestartSec=3s
 TimeoutStartSec=30s
 TimeoutStopSec=15s
 
-NoNewPrivileges=true
+# The unprivileged service may elevate only through the root-owned
+# reality-helper command allowed by /etc/sudoers.d/my-vpn.
+NoNewPrivileges=false
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
