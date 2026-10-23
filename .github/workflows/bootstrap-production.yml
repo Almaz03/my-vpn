@@ -69,7 +69,8 @@ jobs:
           [[ "$BOOTSTRAP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
           remote_dir="/tmp/my-vpn-bootstrap-${GITHUB_SHA}"
           ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+            -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            -o ConnectTimeout=20 -p "$DEPLOY_PORT")
           cleanup() {
             ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" "rm -rf '$remote_dir'" || true
           }
@@ -102,7 +103,8 @@ jobs:
           chmod 0600 "$edge_known_hosts" "$edge_controller_env"
           remote_dir="/tmp/my-vpn-edge-controller-${GITHUB_SHA}"
           ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+            -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            -o ConnectTimeout=20 -p "$DEPLOY_PORT")
           cleanup() {
             ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" "rm -rf '$remote_dir'" || true
           }
