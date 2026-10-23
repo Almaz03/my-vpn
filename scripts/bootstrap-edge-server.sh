@@ -100,7 +100,18 @@ systemctl enable caddy.service xray.service
 systemctl restart caddy.service xray.service
 systemctl is-active --quiet caddy.service
 systemctl is-active --quiet xray.service
-timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/10085'
-ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)443$'
-ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)8444$'
+for _ in {1..30}; do
+  if bash -c 'exec 3<>/dev/tcp/127.0.0.1/10085' 2>/dev/null &&
+    ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)443$' &&
+    ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)8444$'; then
+    listeners_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "${listeners_ready:-false}" != true ]]; then
+  systemctl --no-pager --full status xray.service caddy.service >&2 || true
+  journalctl --no-pager -n 80 -u xray.service -u caddy.service >&2 || true
+  exit 1
+fi
 echo 'edge bootstrap complete'
