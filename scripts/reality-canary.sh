@@ -92,19 +92,39 @@ test_edge() {
   }' > "$work/client-$index.json"
   chown xray:xray "$work/client-$index.json"
   chmod 0600 "$work/client-$index.json"
-  runuser -u xray -- /usr/local/bin/xray run -config "$work/client-$index.json" >/dev/null 2>&1 &
+  if ! runuser -u xray -- /usr/local/bin/xray run -test -config "$work/client-$index.json" \
+    >"$work/xray-$index.log" 2>&1; then
+    echo "reality canary: edge $index client configuration rejected" >&2
+    sed -n '1,80p' "$work/xray-$index.log" >&2
+    return 1
+  fi
+  runuser -u xray -- /usr/local/bin/xray run -config "$work/client-$index.json" \
+    >"$work/xray-$index.log" 2>&1 &
   client_pid=$!
   ready=false
   for _ in {1..20}; do
     if ss -H -ltn "sport = :$port" | grep -q .; then ready=true; break; fi
     sleep 0.25
   done
-  [[ "$ready" == true ]]
-  curl --fail --silent --show-error --max-time 15 \
+  if [[ "$ready" != true ]]; then
+    echo "reality canary: edge $index local client did not become ready" >&2
+    sed -n '1,80p' "$work/xray-$index.log" >&2
+    return 1
+  fi
+  echo "reality canary: edge $index local client ready"
+  if ! curl --fail --silent --show-error --max-time 15 \
     --proxy "socks5h://127.0.0.1:$port" \
     --output "$work/trace-$index.txt" \
-    https://www.cloudflare.com/cdn-cgi/trace
-  grep -Fxq "ip=$server" "$work/trace-$index.txt"
+    https://www.cloudflare.com/cdn-cgi/trace; then
+    echo "reality canary: edge $index tunnel request failed" >&2
+    sed -n '1,80p' "$work/xray-$index.log" >&2
+    return 1
+  fi
+  if ! grep -Fxq "ip=$server" "$work/trace-$index.txt"; then
+    echo "reality canary: edge $index returned an unexpected egress address" >&2
+    sed -n '/^ip=/p' "$work/trace-$index.txt" >&2
+    return 1
+  fi
   kill "$client_pid" >/dev/null 2>&1 || true
   wait "$client_pid" >/dev/null 2>&1 || true
   client_pid=""
