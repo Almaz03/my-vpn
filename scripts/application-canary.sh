@@ -81,6 +81,8 @@ if jq -e '
 	(.dns.tag == "dns_out") and
   ([.inbounds[]? | select(.protocol == "socks" and .port == 10808)] | length == 1) and
   ([.outbounds[]? | select(.tag == "family-proxy" and .protocol == "vless")] | length == 1) and
+	([.outbounds[]? | select(.tag == "family-proxy") | .settings.vnext[0].address |
+	  test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$"))] | length == 1) and
   ([.outbounds[]? | select(.tag == "direct" and .protocol == "freedom")] | length == 1) and
   ([.outbounds[]? | select(.tag == "block" and .protocol == "blackhole")] | length == 1) and
 	([.routing.rules[]? | select(.outboundTag == "direct" and (.inboundTag == ["dns_out"]) and (.ip == ["77.88.8.8"]))] | length == 1) and

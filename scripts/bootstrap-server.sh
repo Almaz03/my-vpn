@@ -252,6 +252,13 @@ else
   fi
 fi
 
+# The Reality transport connects to the server IP directly, while the owned
+# domain remains the SNI. This mirrors the known-good INCY configuration and
+# avoids depending on a mobile carrier's DNS before the tunnel is established.
+reality_server_ipv4="$(getent ahostsv4 tcp.vpn.akalmaz.tech | awk '$2 == "STREAM" {print $1; exit}')"
+[[ "$reality_server_ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+sed -i -E "s/^XRAY_SERVER=.*/XRAY_SERVER=${reality_server_ipv4}/" /etc/my-vpn/xray-client.env
+
 # Add the loopback-only HandlerService API to installations created before the
 # no-restart provisioning path. Public traffic never reaches this listener.
 if ! jq -e '
