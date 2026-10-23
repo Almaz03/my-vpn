@@ -226,9 +226,10 @@
       renderResult(data);
     } catch (error) {
       codeInput.value = '';
-      const message = error instanceof Error && error.message
-        ? error.message
-        : 'Не удалось проверить приглашение. Попробуйте позже.';
+      const serverMessage = error instanceof Error && error.message ? error.message : '';
+      const message = /^(Load failed|Failed to fetch|NetworkError)/i.test(serverMessage)
+        ? 'Связь прервалась во время подключения. Профиль мог успеть создаться — обновите страницу или проверьте устройства в Telegram.'
+        : serverMessage || 'Не удалось проверить приглашение. Попробуйте позже.';
       showStatus(message, 'error');
       codeInput.focus();
     } finally {

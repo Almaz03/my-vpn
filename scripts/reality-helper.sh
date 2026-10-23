@@ -13,6 +13,7 @@ trap 'status=$?; echo "reality helper failed action=$action line=$LINENO status=
 xray_config=/etc/xray/config.json
 client_env=/etc/my-vpn/xray-client.env
 lock=/run/lock/my-vpn-xray.lock
+api_server=127.0.0.1:10085
 request="$(head -c 65537)"
 (( ${#request} <= 65536 )) || exit 2
 jq -e 'type == "object" and .version == 1' <<<"$request" >/dev/null || exit 2
@@ -53,8 +54,8 @@ build_links() {
   deep_link="incy://import/${encoded}"
   printf '%s\n%s\n' "$uri" "$deep_link"
 }
-apply_candidate() {
-  local candidate="$1" before="$2"
+validate_candidate() {
+  local candidate="$1"
   jq -e '([.inbounds[] | select(.tag == "my-vpn-reality")] | length) == 1' "$candidate" >/dev/null
   chown xray:xray "$candidate"
   chmod 0640 "$candidate"
@@ -67,12 +68,25 @@ apply_candidate() {
       <<<"$validation_output" >&2
     exit 1
   fi
-  mv -f "$candidate" "$xray_config"
-  if ! systemctl restart xray.service >/dev/null || ! systemctl is-active --quiet xray.service; then
-    install -m 0640 -o xray -g xray "$before" "$xray_config"
-    systemctl restart xray.service >/dev/null 2>&1 || true
-    exit 1
-  fi
+}
+runtime_add() {
+  local uuid="$1" email="$2" runtime_config output
+  runtime_config="$(mktemp --suffix=.json /etc/xray/.runtime-user.XXXXXX)"
+  chmod 0600 "$runtime_config"
+  jq -n --arg id "$uuid" --arg email "$email" '{
+    inbounds: [{
+      tag: "my-vpn-reality", protocol: "vless",
+      settings: {decryption: "none", clients: [{id: $id, flow: "xtls-rprx-vision", email: $email}]}
+    }]
+  }' > "$runtime_config"
+  output="$(xray api adu --server="$api_server" --timeout=5 "$runtime_config")"
+  rm -f "$runtime_config"
+  grep -Fxq 'Added 1 user(s) in total.' <<<"$output"
+}
+runtime_remove() {
+  local email="$1" output
+  output="$(xray api rmu --server="$api_server" --timeout=5 -tag=my-vpn-reality "$email")"
+  grep -Fxq 'Removed 1 user(s) in total.' <<<"$output"
 }
 
 test -f "$xray_config" -a -f "$client_env"
@@ -101,7 +115,13 @@ case "$action" in
         (.inbounds[] | select(.tag == "my-vpn-reality") | .settings.clients) +=
           [{"id": $id, "flow": "xtls-rprx-vision", "email": $email}]
       ' "$xray_config" > "$candidate"
-      apply_candidate "$candidate" "$before"
+      validate_candidate "$candidate"
+      runtime_add "$uuid" "device-$device_id"
+      if ! mv -f "$candidate" "$xray_config"; then
+        runtime_remove "device-$device_id" >/dev/null 2>&1 || true
+        install -m 0640 -o xray -g xray "$before" "$xray_config"
+        exit 1
+      fi
     fi
     mapfile -t links < <(build_links "$device_id" "$uuid")
     jq -cn --arg link "${links[1]}" --arg path "/api/v1/devices/$device_id/config" \
@@ -132,7 +152,13 @@ case "$action" in
       (.inbounds[] | select(.tag == "my-vpn-reality") | .settings.clients) |=
         map(select(.email != $email))
     ' "$xray_config" > "$candidate"
-    apply_candidate "$candidate" "$before"
+    validate_candidate "$candidate"
+    runtime_remove "device-$device_id"
+    if ! mv -f "$candidate" "$xray_config"; then
+      runtime_add "$uuid" "device-$device_id" >/dev/null 2>&1 || true
+      install -m 0640 -o xray -g xray "$before" "$xray_config"
+      exit 1
+    fi
     jq -cn '{version:1,state:"revoked"}'
     ;;
 esac

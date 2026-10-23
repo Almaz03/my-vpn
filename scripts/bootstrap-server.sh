@@ -180,6 +180,7 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
   [[ "$short_id" =~ ^[0-9a-f]{16}$ ]]
   jq -n --arg private_key "$private_key" --arg short_id "$short_id" '{
     log: {loglevel: "warning"},
+    api: {tag: "api", services: ["HandlerService"]},
     inbounds: [{
       tag: "my-vpn-reality",
       listen: "0.0.0.0",
@@ -199,14 +200,22 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
         }
       },
       sniffing: {enabled: true, destOverride: ["http", "tls", "quic"], routeOnly: true}
+    }, {
+      tag: "api-in",
+      listen: "127.0.0.1",
+      port: 10085,
+      protocol: "dokodemo-door",
+      settings: {address: "127.0.0.1"}
     }],
     outbounds: [
+      {tag: "api", protocol: "freedom"},
       {tag: "direct", protocol: "freedom"},
       {tag: "blocked", protocol: "blackhole"}
     ],
     routing: {
       domainStrategy: "IPIfNonMatch",
       rules: [
+        {type: "field", inboundTag: ["api-in"], outboundTag: "api"},
         {type: "field", ip: ["geoip:private"], outboundTag: "blocked"},
         {type: "field", protocol: ["bittorrent"], outboundTag: "blocked"}
       ]
@@ -242,6 +251,28 @@ else
       "$install_tmp/xray-config.json" /etc/xray/config.json
     sed -i 's/^XRAY_PORT=8443$/XRAY_PORT=443/' /etc/my-vpn/xray-client.env
   fi
+fi
+
+# Add the loopback-only HandlerService API to installations created before the
+# no-restart provisioning path. Public traffic never reaches this listener.
+if ! jq -e '
+  .api.tag == "api" and
+  ([.inbounds[] | select(.tag == "api-in" and .listen == "127.0.0.1" and .port == 10085)] | length) == 1 and
+  ([.outbounds[] | select(.tag == "api" and .protocol == "freedom")] | length) == 1
+' /etc/xray/config.json >/dev/null; then
+  cp -a /etc/xray/config.json "/etc/xray/config.json.pre-runtime-api.$(date -u +%Y%m%dT%H%M%SZ)"
+  jq '
+    .api = {tag: "api", services: ["HandlerService"]} |
+    .inbounds += [{
+      tag: "api-in", listen: "127.0.0.1", port: 10085,
+      protocol: "dokodemo-door", settings: {address: "127.0.0.1"}
+    }] |
+    .outbounds += [{tag: "api", protocol: "freedom"}] |
+    .routing.rules = [{type: "field", inboundTag: ["api-in"], outboundTag: "api"}] + .routing.rules
+  ' /etc/xray/config.json > "$install_tmp/xray-runtime-api.json"
+  /usr/local/bin/xray run -test -config "$install_tmp/xray-runtime-api.json" >/dev/null
+  install -m 0640 -o "$xray_user" -g "$xray_user" \
+    "$install_tmp/xray-runtime-api.json" /etc/xray/config.json
 fi
 test -f /etc/my-vpn/xray-client.env
 test "$(jq -r '.inbounds[] | select(.tag == "my-vpn-reality") | .port' /etc/xray/config.json)" = 443
@@ -285,6 +316,7 @@ systemctl restart xray.service
 systemctl enable --now my-vpn-backup.timer
 systemctl is-active --quiet xray.service
 systemctl is-active --quiet caddy.service
+timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/10085'
 ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)443$'
 ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)8444$'
 ! command -v docker >/dev/null 2>&1 || ! docker inspect amnezia-awg2 >/dev/null 2>&1
