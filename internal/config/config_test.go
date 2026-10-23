@@ -31,17 +31,17 @@ func TestLoadAcceptsSafeMinimum(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsAmneziaWGMode(t *testing.T) {
+func TestLoadAcceptsVLESSRealityMode(t *testing.T) {
 	t.Setenv("INVITE_HMAC_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
 	t.Setenv("ADMIN_API_TOKEN", strings.Repeat("a", 24))
 	t.Setenv("TELEGRAM_BOT_TOKEN", "")
 	t.Setenv("TELEGRAM_ADMIN_IDS", "")
-	t.Setenv("PROVISIONER_MODE", "amneziawg")
+	t.Setenv("PROVISIONER_MODE", "vless-reality")
 	configuration, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configuration.ProvisionerMode != "amneziawg" {
+	if configuration.ProvisionerMode != "vless-reality" {
 		t.Fatalf("mode=%q", configuration.ProvisionerMode)
 	}
 }

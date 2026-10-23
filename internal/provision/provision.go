@@ -16,6 +16,7 @@ type DeviceRequest struct {
 type Result struct {
 	CredentialRef string
 	State         string
+	INCYDeepLink  string
 	ConfigPath    string
 }
 

@@ -1,4 +1,11 @@
-vpn.akalmaz.tech {
+{
+	# Public TCP/443 is owned by Xray Reality. Ordinary HTTPS handshakes are
+	# forwarded to this internal Caddy listener, while public HTTP/80 remains
+	# available for redirects and ACME challenges.
+	https_port 8444
+}
+
+vpn.akalmaz.tech, tcp.vpn.akalmaz.tech {
 	encode zstd gzip
 
 	header {
@@ -7,6 +14,13 @@ vpn.akalmaz.tech {
 		Referrer-Policy "no-referrer"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
+	}
+
+	@geo path /routing/geoip.dat /routing/geoip.dat.sha256 /routing/geosite.dat /routing/geosite.dat.sha256
+	handle @geo {
+		root * /var/lib/my-vpn-routing
+		file_server
+		header Cache-Control "public, max-age=86400, immutable"
 	}
 
 	handle {

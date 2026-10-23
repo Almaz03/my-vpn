@@ -34,16 +34,15 @@ case "$command_name" in
     command -v openssl >/dev/null
     command -v curl >/dev/null
     command -v age >/dev/null
+    command -v xray >/dev/null
     systemctl is-active --quiet caddy.service
-    command -v docker >/dev/null
-    test "$(docker inspect -f '{{.State.Running}}' amnezia-awg2)" = true
-    docker exec amnezia-awg2 awg show awg0 >/dev/null
+    systemctl is-active --quiet xray.service
     test -x /usr/local/libexec/my-vpn/install-release.sh
     test -x /usr/local/libexec/my-vpn/rollback.sh
     test -x /usr/local/libexec/my-vpn/deactivate-release.sh
     test -x /usr/local/libexec/my-vpn/application-canary.sh
-    test -x /usr/local/libexec/my-vpn/amneziawg-helper
-    test -f /etc/my-vpn/amneziawg.env
+    test -x /usr/local/libexec/my-vpn/reality-canary.sh
+    test -f /etc/my-vpn/xray-client.env
     ;;
   install)
     [[ $# -eq 2 ]] || exit 2
@@ -75,11 +74,7 @@ case "$command_name" in
     ;;
   canary)
     [[ $# -eq 1 ]] || exit 2
-    provisioner_mode="$(sed -n 's/^PROVISIONER_MODE=//p' /etc/my-vpn/my-vpn.env | tail -n 1)"
-    if [[ "$provisioner_mode" != amneziawg ]]; then
-      echo "unsupported production provisioner" >&2
-      exit 1
-    fi
+    /usr/local/libexec/my-vpn/reality-canary.sh
     /usr/local/libexec/my-vpn/application-canary.sh
     ;;
   *)

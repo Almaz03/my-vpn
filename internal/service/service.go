@@ -32,6 +32,7 @@ type Service struct {
 
 type Activation struct {
 	Device            store.Device
+	INCYDeepLink      string
 	ConfigDownloadURL string
 	QRCodeURL         string
 	Message           string
@@ -40,8 +41,6 @@ type Activation struct {
 type SubscriptionPayload struct {
 	Body        string
 	ContentType string
-	Filename    string
-	QRContent   string
 	ExpiresAt   time.Time
 }
 
@@ -54,6 +53,29 @@ type AccessRequest struct {
 	State        string    `json:"state"`
 	Code         string    `json:"code,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+type RoutingProfile struct {
+	Name              string            `json:"Name"`
+	LastUpdated       string            `json:"LastUpdated"`
+	GlobalProxy       string            `json:"GlobalProxy"`
+	RemoteDNSType     string            `json:"RemoteDNSType"`
+	RemoteDNSDomain   string            `json:"RemoteDNSDomain"`
+	RemoteDNSIP       string            `json:"RemoteDNSIP"`
+	DomesticDNSType   string            `json:"DomesticDNSType"`
+	DomesticDNSDomain string            `json:"DomesticDNSDomain"`
+	DomesticDNSIP     string            `json:"DomesticDNSIP"`
+	GeoIPURL          string            `json:"Geoipurl"`
+	GeositeURL        string            `json:"Geositeurl"`
+	DNSHosts          map[string]string `json:"DnsHosts"`
+	DirectSites       []string          `json:"DirectSites"`
+	DirectIP          []string          `json:"DirectIp"`
+	ProxySites        []string          `json:"ProxySites"`
+	ProxyIP           []string          `json:"ProxyIp"`
+	BlockSites        []string          `json:"BlockSites"`
+	BlockIP           []string          `json:"BlockIp"`
+	DomainStrategy    string            `json:"DomainStrategy"`
+	FakeDNS           string            `json:"FakeDNS"`
 }
 
 var (
@@ -262,6 +284,7 @@ func (s *Service) Activate(ctx context.Context, code, platform, requestedDeviceN
 	activation.Device.State = result.State
 	if result.State == "active" {
 		subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + subscriptionToken}).String()
+		activation.INCYDeepLink = "incy://add/" + subscriptionURL
 		activation.ConfigDownloadURL = subscriptionURL + "?download=1"
 		activation.QRCodeURL = subscriptionURL + "/qr"
 	}
@@ -300,13 +323,34 @@ func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionP
 	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
-	if client.Body == "" || client.ContentType == "" || client.Filename == "" || client.QRContent == "" {
+	body, err := buildFullXrayConfig(client.VLESSURI)
+	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
-	return SubscriptionPayload{
-		Body: client.Body, ContentType: client.ContentType, Filename: client.Filename,
-		QRContent: client.QRContent, ExpiresAt: subscription.ExpiresAt,
-	}, nil
+	return SubscriptionPayload{Body: body, ContentType: "application/json; charset=utf-8", ExpiresAt: subscription.ExpiresAt}, nil
+}
+
+func (s *Service) RoutingProfileURL() string {
+	return s.baseURL.ResolveReference(&url.URL{Path: "/routing/family-ru-direct.json", RawQuery: "v=5"}).String()
+}
+
+func (s *Service) SubscriptionDeepLink(token string) string {
+	subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + token}).String()
+	return "incy://add/" + subscriptionURL
+}
+
+func (s *Service) RoutingProfile() RoutingProfile {
+	return RoutingProfile{
+		Name: "Family RU Direct", LastUpdated: "1792687260", GlobalProxy: "true",
+		RemoteDNSType: "DoU", RemoteDNSDomain: "", RemoteDNSIP: "8.8.8.8",
+		DomesticDNSType: "DoU", DomesticDNSDomain: "", DomesticDNSIP: "77.88.8.8",
+		GeoIPURL: "", GeositeURL: "",
+		DNSHosts:    map[string]string{},
+		DirectSites: append([]string(nil), familyDirectDomains...),
+		DirectIP:    append([]string(nil), privateNetworks...),
+		ProxySites:  []string{}, ProxyIP: []string{}, BlockSites: []string{}, BlockIP: []string{},
+		DomainStrategy: "AsIs", FakeDNS: "false",
+	}
 }
 
 func (s *Service) subscriptionHMAC(token string) []byte {
@@ -387,10 +431,16 @@ func validateProvisionResult(result provision.Result) error {
 	if result.State != "pending" && result.State != "active" {
 		return errors.New("provisioner returned an invalid state")
 	}
+	if result.INCYDeepLink != "" {
+		parsed, err := url.Parse(result.INCYDeepLink)
+		if err != nil || parsed.Scheme != "incy" || !strings.HasPrefix(result.INCYDeepLink, "incy://") {
+			return errors.New("provisioner returned an invalid INCY deep link")
+		}
+	}
 	if result.ConfigPath != "" && !safeRelativePath(result.ConfigPath) {
 		return errors.New("provisioner returned an unsafe config path")
 	}
-	if result.State == "active" && result.ConfigPath == "" {
+	if result.State == "active" && result.INCYDeepLink == "" && result.ConfigPath == "" {
 		return errors.New("active provisioner result has no import mechanism")
 	}
 	return nil

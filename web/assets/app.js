@@ -10,11 +10,11 @@
   };
 
   const PLATFORM_HINTS = {
-    android: 'Установите AmneziaVPN из официального источника. Android попросит разрешить VPN-подключение.',
-    ios: 'Установите AmneziaVPN, скачайте профиль и импортируйте его из файла.',
-    windows: 'Установите AmneziaVPN для Windows и импортируйте скачанный файл.',
-    macos: 'Установите AmneziaVPN для macOS и импортируйте скачанный файл.',
-    linux: 'Откройте официальный сайт AmneziaVPN и выберите пакет для вашего дистрибутива.'
+    android: 'Установите INCY из официального источника. Android попросит разрешить VPN-подключение.',
+    ios: 'Установите INCY, затем подтвердите добавление VPN-конфигурации в iOS или iPadOS.',
+    windows: 'Установите INCY для Windows и подтвердите импорт профиля в приложении.',
+    macos: 'Установите INCY для macOS и разрешите добавление VPN-конфигурации в настройках системы.',
+    linux: 'Откройте официальный сайт INCY и выберите поддерживаемый пакет для вашего дистрибутива.'
   };
 
   const form = document.querySelector('#activation-form');
@@ -30,10 +30,12 @@
   const resultMessage = document.querySelector('#result-message');
   const installHint = document.querySelector('#install-hint');
   const importHint = document.querySelector('#import-hint');
-  const openAmnezia = document.querySelector('#open-amnezia');
+  const importButton = document.querySelector('#import-button');
   const downloadLink = document.querySelector('#download-link');
+  const copyLinkButton = document.querySelector('#copy-link-button');
   const qrStep = document.querySelector('#qr-step');
   const qrImage = document.querySelector('#qr-image');
+  const routingNote = document.querySelector('#routing-note');
   const showRequestForm = document.querySelector('#show-request-form');
   const accessRequestPanel = document.querySelector('#access-request-panel');
   const accessRequestForm = document.querySelector('#access-request-form');
@@ -48,11 +50,10 @@
   const useApprovedCode = document.querySelector('#use-approved-code');
 
   let platform = detectPlatform();
+  let deepLink = '';
   let nextAttemptAt = 0;
   let requestToken = '';
   let pollTimer = 0;
-  let configFile = null;
-  let configDownloadUrl = '';
 
   selectPlatform(platform);
 
@@ -81,20 +82,6 @@
       showRequestStatus('Связь восстановлена. Проверяем запрос…', 'busy');
       pollAccessRequest();
     }
-  });
-
-  openAmnezia.addEventListener('click', async () => {
-    if (!configDownloadUrl) return;
-    if (configFile && navigator.share && navigator.canShare && navigator.canShare({ files: [configFile] })) {
-      try {
-        await navigator.share({ files: [configFile], title: 'Family VPN' });
-        return;
-      } catch (error) {
-        if (error && error.name === 'AbortError') return;
-      }
-    }
-    downloadLink.click();
-    importHint.textContent = 'Файл скачан. Откройте его и выберите AmneziaVPN в меню «Поделиться».';
   });
 
   showRequestForm.addEventListener('click', () => {
@@ -179,6 +166,21 @@
     codeInput.value = codeInput.value.replace(/[^A-Za-z0-9-]/g, '').toUpperCase();
     if (caret !== null) codeInput.setSelectionRange(caret, caret);
     clearStatus();
+  });
+
+  importButton.addEventListener('click', () => {
+    if (!deepLink) return;
+    window.location.assign(deepLink);
+  });
+
+  copyLinkButton.addEventListener('click', async () => {
+    if (!deepLink || !navigator.clipboard || !window.isSecureContext) return;
+    try {
+      await navigator.clipboard.writeText(deepLink);
+      copyLinkButton.textContent = 'Ссылка скопирована';
+    } catch {
+      copyLinkButton.textContent = 'Не удалось скопировать';
+    }
   });
 
   form.addEventListener('submit', async (event) => {
@@ -397,59 +399,40 @@
   function renderResult(data) {
     clearAccessRequestToken();
     clearStatus();
+    deepLink = safeDeepLink(data.incy_deep_link);
     const downloadUrl = safeLocalUrl(data.config_download_url);
     const qrUrl = safeImageUrl(data.qr_code_url);
-    const profileAvailable = Boolean(downloadUrl || qrUrl);
-    configDownloadUrl = downloadUrl;
-    configFile = null;
+    const profileAvailable = Boolean(deepLink || downloadUrl || qrUrl);
 
     resultTitle.textContent = profileAvailable ? 'Профиль устройства готов' : 'Приглашение принято';
     resultMessage.textContent = typeof data.message === 'string' && data.message.length <= 180
       ? data.message
       : profileAvailable
-        ? 'Установите AmneziaVPN и импортируйте созданный профиль.'
+        ? 'Установите INCY и импортируйте созданный профиль.'
         : 'Профиль ещё не выдан. Администратор завершит подготовку подключения.';
     installHint.textContent = PLATFORM_HINTS[platform];
     importHint.textContent = profileAvailable
       ? 'Операционная система или приложение могут попросить подтверждение — это нормальная мера безопасности.'
       : 'Кнопка импорта появится после безопасного создания отдельного профиля для устройства.';
 
+    importButton.hidden = !deepLink;
+    copyLinkButton.hidden = !deepLink || !navigator.clipboard || !window.isSecureContext;
     downloadLink.hidden = !downloadUrl;
     if (downloadUrl) downloadLink.href = downloadUrl;
-    openAmnezia.hidden = !downloadUrl;
-    openAmnezia.disabled = false;
-    openAmnezia.textContent = 'Открыть в AmneziaVPN';
-    if (downloadUrl) prepareConfigShare(downloadUrl);
 
     qrStep.hidden = !qrUrl;
     if (qrUrl) qrImage.src = qrUrl;
+    routingNote.hidden = data.routing_mode !== 'ru-direct';
+
     activationPanel.hidden = true;
     resultPanel.hidden = false;
     resultPanel.focus({ preventScroll: true });
     resultPanel.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
   }
 
-  async function prepareConfigShare(downloadUrl) {
-    if (!navigator.share || !navigator.canShare || typeof File !== 'function') return;
-    openAmnezia.disabled = true;
-    openAmnezia.textContent = 'Подготавливаем профиль…';
-    try {
-      const response = await fetch(downloadUrl, { credentials: 'same-origin', cache: 'no-store' });
-      if (!response.ok) throw new Error('profile unavailable');
-      const body = await response.text();
-      if (body.length < 100 || body.length > 32768 || !body.includes('[Interface]') || !body.includes('[Peer]')) {
-        throw new Error('invalid profile');
-      }
-      const file = new File([body], 'family-vpn.conf', { type: 'text/plain' });
-      if (configDownloadUrl === downloadUrl && navigator.canShare({ files: [file] })) configFile = file;
-    } catch {
-      configFile = null;
-    } finally {
-      if (configDownloadUrl === downloadUrl) {
-        openAmnezia.disabled = false;
-        openAmnezia.textContent = 'Открыть в AmneziaVPN';
-      }
-    }
+  function safeDeepLink(value) {
+    if (typeof value !== 'string' || value.length > 4096) return '';
+    return /^incy:\/\/[A-Za-z0-9._~!$&'()*+,;=:@/?%-]+$/.test(value) ? value : '';
   }
 
   function safeLocalUrl(value) {

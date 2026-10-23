@@ -40,7 +40,7 @@ func Load() (Config, error) {
 		return Config{}, errors.New("PUBLIC_BASE_URL must be an absolute https URL without user info")
 	}
 	mode := envOr("PROVISIONER_MODE", "noop")
-	if mode != "noop" && mode != "amneziawg" {
+	if mode != "noop" && mode != "vless-reality" {
 		return Config{}, fmt.Errorf("unsupported PROVISIONER_MODE %q", mode)
 	}
 	admins, err := parseAdmins(os.Getenv("TELEGRAM_ADMIN_IDS"))

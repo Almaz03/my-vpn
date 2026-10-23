@@ -41,14 +41,6 @@ jobs:
           go test -race -count=1 ./...
           go build -trimpath -o /tmp/my-vpn ./cmd/my-vpn
           test -s web/index.html
-          python3 - <<'PY'
-          import ipaddress, json
-          with open("web/ru-direct.json", encoding="utf-8") as source:
-              routes = json.load(source)
-          assert 1 <= len(routes) <= 250
-          assert all(item.get("hostname") and item.get("ips") for item in routes)
-          assert all(ipaddress.ip_address(ip).version == 4 for item in routes for ip in item["ips"])
-          PY
           while IFS= read -r -d '' file; do
             node --check "$file"
           done < <(find web -type f -name '*.js' -print0)
@@ -87,7 +79,8 @@ jobs:
     needs: build
     if: >-
       (github.event_name == 'push' &&
-       vars.ENABLE_PRODUCTION_DEPLOY == 'true') ||
+       vars.ENABLE_PRODUCTION_DEPLOY == 'true' &&
+       vars.PROVISIONER_MODE == 'vless-reality') ||
       (github.event_name == 'workflow_dispatch' && inputs.deploy)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -130,7 +123,7 @@ jobs:
             printf 'APP_DB_PATH=/var/lib/my-vpn/my-vpn.db\n'
             printf 'PUBLIC_BASE_URL=https://vpn.akalmaz.tech\n'
             printf 'WEB_ROOT=/opt/my-vpn/current/web\n'
-            printf 'PROVISIONER_MODE=amneziawg\n'
+            printf 'PROVISIONER_MODE=vless-reality\n'
             printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
             printf 'TELEGRAM_ADMIN_IDS=%s\n' "$TELEGRAM_ADMIN_IDS"
           } > "$RUNNER_TEMP/runtime.env"
@@ -183,7 +176,7 @@ jobs:
             exit 1
           fi
 
-      - name: Public portal and AmneziaWG canary
+      - name: Public portal and Reality canary
         id: public_smoke
         continue-on-error: true
         shell: bash

@@ -16,7 +16,7 @@ import (
 	"github.com/Almaz03/my-vpn/internal/store"
 )
 
-type apiAmneziaWGProvider struct{ credential string }
+type apiRealityProvider struct{ credential string }
 
 type recordingNotifier struct {
 	id       string
@@ -31,38 +31,17 @@ func (n *recordingNotifier) NotifyAccessRequest(_ context.Context, id, name, dev
 	return n.err
 }
 
-func (p *apiAmneziaWGProvider) Provision(_ context.Context, request provision.DeviceRequest) (provision.Result, error) {
-	p.credential = "amneziawg:" + request.DeviceID
-	return provision.Result{CredentialRef: p.credential, State: "active", ConfigPath: "/api/v1/devices/" + request.DeviceID + "/config"}, nil
+func (p *apiRealityProvider) Provision(_ context.Context, request provision.DeviceRequest) (provision.Result, error) {
+	p.credential = "vless-reality:" + request.DeviceID
+	return provision.Result{CredentialRef: p.credential, State: "active", INCYDeepLink: "incy://import/provider-secret"}, nil
 }
-func (p *apiAmneziaWGProvider) Revoke(context.Context, string) error { return nil }
-func (p *apiAmneziaWGProvider) ClientConfig(context.Context, string) (provision.ClientConfig, error) {
+func (p *apiRealityProvider) Revoke(context.Context, string) error { return nil }
+func (p *apiRealityProvider) ClientConfig(context.Context, string) (provision.ClientConfig, error) {
 	return provision.ClientConfig{
-		Body: testAPIConfig, ContentType: "text/plain; charset=utf-8",
-		Filename: "family-vpn.conf", QRContent: testAPIConfig,
+		VLESSURI:     "vless://00000000-0000-4000-8000-000000000001@vpn.example.test:8443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&fp=chrome&pbk=public&sid=abcd#Family",
+		INCYDeepLink: "incy://import/provider-secret",
 	}, nil
 }
-
-const testAPIConfig = `[Interface]
-PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-Address = 10.8.1.2/32
-Jc = 5
-Jmin = 50
-Jmax = 1000
-S1 = 20
-S2 = 40
-H1 = 111
-H2 = 222
-H3 = 333
-H4 = 444
-
-[Peer]
-PublicKey = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
-PresharedKey = CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=
-AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = vpn.example.test:35473
-PersistentKeepalive = 25
-`
 
 func TestAdminInvitationAndOneTimeActivationFlow(t *testing.T) {
 	database, err := store.Open(t.TempDir() + "/test.db")
@@ -101,7 +80,7 @@ func TestAdminInvitationAndOneTimeActivationFlow(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result["state"] != "pending" || result["config_download_url"] != "" {
+	if result["state"] != "pending" || result["incy_deep_link"] != "" || result["config_download_url"] != "" {
 		t.Fatalf("unsafe noop response: %#v", result)
 	}
 
@@ -133,14 +112,14 @@ func TestAdminRequiresBearerTokenAndHealthChecksDB(t *testing.T) {
 	}
 }
 
-func TestAmneziaWGActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) {
+func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) {
 	database, err := store.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
 	base, _ := url.Parse("https://vpn.example.test")
-	provider := &apiAmneziaWGProvider{}
+	provider := &apiRealityProvider{}
 	application := service.New(database, provider, bytes.Repeat([]byte{5}, 32), base)
 	handler := New(application, database, "this-is-a-long-admin-token", t.TempDir(), 10*time.Minute).Handler()
 
@@ -161,31 +140,37 @@ func TestAmneziaWGActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, activate)
 	var activation struct {
-		Download string `json:"config_download_url"`
+		DeepLink string `json:"incy_deep_link"`
 		QRCode   string `json:"qr_code_url"`
 	}
 	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &activation) != nil {
 		t.Fatalf("activate status=%d body=%s", response.Code, response.Body.String())
 	}
-	const prefix = "https://vpn.example.test"
-	if !strings.HasPrefix(activation.Download, prefix+"/s/") || !strings.HasSuffix(activation.Download, "?download=1") {
-		t.Fatalf("unsafe download URL=%q", activation.Download)
+	const prefix = "incy://add/https://vpn.example.test"
+	if !strings.HasPrefix(activation.DeepLink, prefix+"/s/") || strings.Contains(activation.DeepLink, "provider-secret") {
+		t.Fatalf("unsafe deep link=%q", activation.DeepLink)
 	}
 	if !strings.HasPrefix(activation.QRCode, "https://vpn.example.test/s/") || !strings.HasSuffix(activation.QRCode, "/qr") {
 		t.Fatalf("unsafe QR URL=%q", activation.QRCode)
 	}
-	downloadURL, err := url.Parse(activation.Download)
-	if err != nil {
-		t.Fatal(err)
-	}
+	subscriptionPath := strings.TrimPrefix(activation.DeepLink, prefix)
 	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, downloadURL.RequestURI(), nil))
-	if response.Code != http.StatusOK || response.Body.String() != testAPIConfig {
-		t.Fatalf("subscription status=%d is not an AmneziaWG configuration", response.Code)
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, subscriptionPath, nil))
+	var fullConfig struct {
+		Remarks   string `json:"remarks"`
+		Inbounds  []any  `json:"inbounds"`
+		Outbounds []any  `json:"outbounds"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &fullConfig) != nil ||
+		fullConfig.Remarks != "Family VPN" || len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 {
+		t.Fatalf("subscription status=%d is not a full Xray configuration", response.Code)
 	}
 	if response.Header().Get("Cache-Control") != "no-store, private, max-age=0" ||
-		response.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
-		response.Header().Get("Content-Disposition") != `attachment; filename="family-vpn.conf"` {
+		response.Header().Get("Content-Type") != "application/json; charset=utf-8" ||
+		response.Header().Get("Profile-Update-Interval") != "1" ||
+		response.Header().Get("Autorouting") != "" ||
+		response.Header().Get("Routing-Geo-Update-Interval") != "" ||
+		response.Header().Get("Hide-Url") != "1" {
 		t.Fatalf("unsafe subscription headers: %#v", response.Header())
 	}
 	qrURL, err := url.Parse(activation.QRCode)
@@ -199,6 +184,17 @@ func TestAmneziaWGActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T
 		t.Fatalf("QR status=%d type=%q", response.Code, response.Header().Get("Content-Type"))
 	}
 
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/routing/family-ru-direct.json", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"GlobalProxy":"true"`) ||
+		!strings.Contains(response.Body.String(), `"DomainStrategy":"AsIs"`) ||
+		!strings.Contains(response.Body.String(), `"LastUpdated":"1792687260"`) ||
+		!strings.Contains(response.Body.String(), `"RemoteDNSType":"DoU"`) ||
+		!strings.Contains(response.Body.String(), `"RemoteDNSIP":"8.8.8.8"`) ||
+		!strings.Contains(response.Body.String(), `"DomesticDNSType":"DoU"`) ||
+		!strings.Contains(response.Body.String(), "domain:ru") || strings.Contains(response.Body.String(), "geoip:ru") {
+		t.Fatalf("routing status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestAdminStatusAndInvitationLifecycle(t *testing.T) {

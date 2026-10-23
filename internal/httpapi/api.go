@@ -54,6 +54,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/access-requests/status", a.accessRequestStatus)
 	mux.HandleFunc("GET /s/{token}", a.subscription)
 	mux.HandleFunc("GET /s/{token}/qr", a.subscriptionQR)
+	mux.HandleFunc("GET /routing/family-ru-direct.json", a.routingProfile)
 	mux.HandleFunc("POST /api/v1/admin/invitations", a.requireAdmin(a.createInvitation))
 	mux.HandleFunc("GET /api/v1/admin/invitations", a.requireAdmin(a.listInvitations))
 	mux.HandleFunc("POST /api/v1/admin/invitations/{id}/revoke", a.requireAdmin(a.revokeInvitation))
@@ -180,8 +181,7 @@ func pruneTimes(values []time.Time, cutoff time.Time) []time.Time {
 
 func (a *API) subscriptionQR(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	payload, err := a.service.Subscription(r.Context(), token)
-	if err != nil {
+	if _, err := a.service.Subscription(r.Context(), token); err != nil {
 		if errors.Is(err, store.ErrSubscriptionNotFound) {
 			writeError(w, http.StatusNotFound, "subscription not found or expired")
 			return
@@ -189,7 +189,7 @@ func (a *API) subscriptionQR(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "subscription temporarily unavailable")
 		return
 	}
-	code, err := qr.Encode(payload.QRContent, qr.M)
+	code, err := qr.Encode(a.service.SubscriptionDeepLink(token), qr.M)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not encode QR")
 		return
@@ -218,15 +218,19 @@ func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store, private, max-age=0")
 	w.Header().Set("Expires", "0")
+	w.Header().Set("Profile-Title", "base64:RmFtaWx5IFZQTg==")
+	w.Header().Set("Profile-Update-Interval", "1")
+	w.Header().Set("Hide-Url", "1")
 	if r.URL.Query().Get("download") == "1" {
-		filename := payload.Filename
-		if filename == "" {
-			filename = "family-vpn.conf"
-		}
-		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="family-vpn.json"`)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, payload.Body)
+}
+
+func (a *API) routingProfile(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	writeJSON(w, http.StatusOK, a.service.RoutingProfile())
 }
 
 func (a *API) revokeInvitation(w http.ResponseWriter, r *http.Request) {
@@ -289,8 +293,10 @@ func (a *API) activate(w http.ResponseWriter, r *http.Request) {
 		"device_id":           activation.Device.ID,
 		"device_name":         activation.Device.DeviceName,
 		"state":               activation.Device.State,
+		"incy_deep_link":      activation.INCYDeepLink,
 		"config_download_url": activation.ConfigDownloadURL,
 		"qr_code_url":         activation.QRCodeURL,
+		"routing_mode":        "ru-direct",
 		"message":             activation.Message,
 	})
 }

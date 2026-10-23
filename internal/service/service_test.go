@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -32,35 +33,12 @@ func (p *subscriptionProvisioner) Provision(_ context.Context, request provision
 	if p.configs == nil {
 		p.configs = make(map[string]provision.ClientConfig)
 	}
-	credential := "amneziawg:" + request.DeviceID
-	p.configs[credential] = provision.ClientConfig{
-		Body: testAWGConfig, ContentType: "text/plain; charset=utf-8",
-		Filename: "family-vpn.conf", QRContent: testAWGConfig,
-	}
-	return provision.Result{CredentialRef: credential, State: "active", ConfigPath: "/api/v1/devices/" + request.DeviceID + "/config"}, nil
+	credential := "vless-reality:" + request.DeviceID
+	uuid := "00000000-0000-4000-8000-" + request.DeviceID[:12]
+	uri := "vless://" + uuid + "@vpn.example.test:8443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&fp=chrome&pbk=public&sid=abcd#Family"
+	p.configs[credential] = provision.ClientConfig{VLESSURI: uri, INCYDeepLink: "incy://import/test"}
+	return provision.Result{CredentialRef: credential, State: "active", INCYDeepLink: "incy://import/test"}, nil
 }
-
-const testAWGConfig = `[Interface]
-PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-Address = 10.8.1.2/32
-DNS = 1.1.1.1, 8.8.8.8
-Jc = 5
-Jmin = 50
-Jmax = 1000
-S1 = 20
-S2 = 40
-H1 = 111
-H2 = 222
-H3 = 333
-H4 = 444
-
-[Peer]
-PublicKey = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
-PresharedKey = CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=
-AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = vpn.example.test:35473
-PersistentKeepalive = 25
-`
 
 func (p *subscriptionProvisioner) Revoke(_ context.Context, credential string) error {
 	p.mu.Lock()
@@ -230,17 +208,26 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const prefix = "https://vpn.example.test/s/"
-	if !strings.HasPrefix(activation.ConfigDownloadURL, prefix) || !strings.HasSuffix(activation.ConfigDownloadURL, "?download=1") {
-		t.Fatalf("unsafe activation download URL: %q", activation.ConfigDownloadURL)
+	const prefix = "incy://add/https://vpn.example.test/s/"
+	if !strings.HasPrefix(activation.INCYDeepLink, prefix) || strings.Contains(activation.INCYDeepLink, "vless://") {
+		t.Fatalf("unsafe activation deep link: %q", activation.INCYDeepLink)
 	}
-	token := strings.TrimSuffix(strings.TrimPrefix(activation.ConfigDownloadURL, prefix), "?download=1")
+	token := strings.TrimPrefix(activation.INCYDeepLink, prefix)
 	payload, err := application.Subscription(context.Background(), token)
-	if err != nil || payload.ContentType != "text/plain; charset=utf-8" {
+	if err != nil || payload.ContentType != "application/json; charset=utf-8" {
 		t.Fatalf("subscription err=%v content-type=%q", err, payload.ContentType)
 	}
-	if payload.Body != testAWGConfig || payload.QRContent != testAWGConfig || payload.Filename != "family-vpn.conf" {
-		t.Fatal("subscription is not a complete AmneziaWG configuration")
+	var fullConfig struct {
+		Remarks   string `json:"remarks"`
+		Inbounds  []any  `json:"inbounds"`
+		Outbounds []any  `json:"outbounds"`
+		Routing   struct {
+			Rules []any `json:"rules"`
+		} `json:"routing"`
+	}
+	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.Remarks != "Family VPN" ||
+		len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 || len(fullConfig.Routing.Rules) < 1 {
+		t.Fatal("subscription is not a complete Family VPN Xray configuration")
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -293,11 +280,11 @@ func TestSeparateClientsHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T
 		}
 		activations = append(activations, activation)
 	}
-	if activations[0].ConfigDownloadURL == activations[1].ConfigDownloadURL || activations[0].Device.ID == activations[1].Device.ID {
+	if activations[0].INCYDeepLink == activations[1].INCYDeepLink || activations[0].Device.ID == activations[1].Device.ID {
 		t.Fatal("devices did not receive unique identities and subscriptions")
 	}
-	firstToken := strings.TrimSuffix(strings.TrimPrefix(activations[0].ConfigDownloadURL, "https://vpn.example.test/s/"), "?download=1")
-	secondToken := strings.TrimSuffix(strings.TrimPrefix(activations[1].ConfigDownloadURL, "https://vpn.example.test/s/"), "?download=1")
+	firstToken := strings.TrimPrefix(activations[0].INCYDeepLink, "incy://add/https://vpn.example.test/s/")
+	secondToken := strings.TrimPrefix(activations[1].INCYDeepLink, "incy://add/https://vpn.example.test/s/")
 	if _, err := application.Revoke(context.Background(), activations[0].Device.ID); err != nil {
 		t.Fatal(err)
 	}
