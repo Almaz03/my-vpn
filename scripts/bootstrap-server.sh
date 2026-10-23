@@ -208,7 +208,6 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
       settings: {address: "127.0.0.1"}
     }],
     outbounds: [
-      {tag: "api", protocol: "freedom"},
       {tag: "direct", protocol: "freedom"},
       {tag: "blocked", protocol: "blackhole"}
     ],
@@ -258,17 +257,19 @@ fi
 if ! jq -e '
   .api.tag == "api" and
   ([.inbounds[] | select(.tag == "api-in" and .listen == "127.0.0.1" and .port == 10085)] | length) == 1 and
-  ([.outbounds[] | select(.tag == "api" and .protocol == "freedom")] | length) == 1
+  ([.outbounds[] | select(.tag == "api")] | length) == 0 and
+  ([.routing.rules[] | select(.outboundTag == "api" and ((.inboundTag // []) | index("api-in")))] | length) == 1
 ' /etc/xray/config.json >/dev/null; then
   cp -a /etc/xray/config.json "/etc/xray/config.json.pre-runtime-api.$(date -u +%Y%m%dT%H%M%SZ)"
   jq '
     .api = {tag: "api", services: ["HandlerService"]} |
-    .inbounds += [{
+    .inbounds = ([.inbounds[] | select(.tag != "api-in")] + [{
       tag: "api-in", listen: "127.0.0.1", port: 10085,
       protocol: "dokodemo-door", settings: {address: "127.0.0.1"}
-    }] |
-    .outbounds += [{tag: "api", protocol: "freedom"}] |
-    .routing.rules = [{type: "field", inboundTag: ["api-in"], outboundTag: "api"}] + .routing.rules
+    }]) |
+    .outbounds = [.outbounds[] | select(.tag != "api")] |
+    .routing.rules = [{type: "field", inboundTag: ["api-in"], outboundTag: "api"}] +
+      [.routing.rules[] | select(((.inboundTag // []) | index("api-in")) | not)]
   ' /etc/xray/config.json > "$install_tmp/xray-runtime-api.json"
   /usr/local/bin/xray run -test -config "$install_tmp/xray-runtime-api.json" >/dev/null
   install -m 0640 -o "$xray_user" -g "$xray_user" \
