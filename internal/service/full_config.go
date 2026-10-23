@@ -11,7 +11,10 @@ import (
 
 var fullConfigUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-const familyProxyTag = "🇫🇮 Финляндия 🚀"
+const (
+	familyProfileName = "🇫🇮 Финляндия 🚀"
+	familyProxyTag    = "family-proxy"
+)
 
 var privateNetworks = []string{
 	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
@@ -45,7 +48,7 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 
 	directDomains := append([]string(nil), familyDirectDomains...)
 	config := map[string]any{
-		"remarks": familyProxyTag,
+		"remarks": familyProfileName,
 		"log":     map[string]any{"loglevel": "warning"},
 		"dns": map[string]any{
 			"queryStrategy": "UseIPv4",
