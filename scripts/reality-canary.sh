@@ -35,26 +35,37 @@ jq -cn --arg id "$device_id" \
   /usr/local/libexec/my-vpn/reality-helper provision > "$work/provision.json"
 provisioned=true
 echo "reality canary: temporary client provisioned"
-uuid="$(jq -r --arg email "device-$device_id" '
-  .inbounds[] | select(.tag == "my-vpn-reality") |
-  .settings.clients[] | select(.email == $email) | .id
-' /etc/xray/config.json)"
-[[ "$uuid" =~ ^[0-9a-f-]{36}$ ]]
 rm -f "$work/provision.json"
 
-get_env() { sed -n "s/^$1=//p" /etc/my-vpn/xray-client.env; }
-public_key="$(get_env XRAY_PUBLIC_KEY)"
-short_id="$(get_env XRAY_SHORT_ID)"
-sni="$(get_env XRAY_SNI)"
-server_port="$(get_env XRAY_PORT)"
+config_request="$(jq -cn --arg credential "vless-reality:$device_id" '{version:1,credential_ref:$credential}')"
+config_response="$(printf '%s' "$config_request" | /usr/local/libexec/my-vpn/reality-helper config)"
+uri="$(jq -er '.vless_uri | select(startswith("vless://"))' <<<"$config_response")"
+authority="${uri#vless://}"
+uuid="${authority%%@*}"
+server_and_query="${authority#*@}"
+server_authority="${server_and_query%%\?*}"
+server="${server_authority%:*}"
+server_port="${server_authority##*:}"
+query="${server_and_query#*\?}"
+query="${query%%#*}"
+query_value() { tr '&' '\n' <<<"$query" | sed -n "s/^$1=//p" | head -n 1; }
+public_key="$(query_value pbk)"
+short_id="$(query_value sid)"
+sni="$(query_value sni)"
+[[ "$uuid" =~ ^[0-9a-f-]{36}$ && "$server" =~ ^[A-Za-z0-9.-]+$ ]]
+[[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ && "$short_id" =~ ^[0-9a-f]{16}$ ]]
 [[ "$server_port" =~ ^[0-9]{1,5}$ ]] && (( server_port >= 1 && server_port <= 65535 ))
+client_server="$server"
+if [[ ! -f /etc/my-vpn/edge-controller.env ]]; then
+  client_server=127.0.0.1
+fi
 port=18090
 while ss -H -ltn "sport = :$port" | grep -q .; do
   ((port++))
   ((port < 18150))
 done
 
-jq -n --arg id "$uuid" --arg public_key "$public_key" --arg short_id "$short_id" \
+jq -n --arg id "$uuid" --arg server "$client_server" --arg public_key "$public_key" --arg short_id "$short_id" \
   --arg sni "$sni" --argjson port "$port" --argjson server_port "$server_port" '{
     log: {loglevel:"warning"},
     inbounds:[{
@@ -63,7 +74,7 @@ jq -n --arg id "$uuid" --arg public_key "$public_key" --arg short_id "$short_id"
     }],
     outbounds:[{
       protocol:"vless",
-      settings:{vnext:[{address:"127.0.0.1",port:$server_port,users:[{
+      settings:{vnext:[{address:$server,port:$server_port,users:[{
         id:$id,encryption:"none",flow:"xtls-rprx-vision"
       }]}]},
       streamSettings:{
