@@ -225,7 +225,7 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 			Rules []any `json:"rules"`
 		} `json:"routing"`
 	}
-	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.Remarks != "Family VPN" ||
+	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.Remarks != "🇫🇮 Финляндия 🚀" ||
 		len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 || len(fullConfig.Routing.Rules) < 1 {
 		t.Fatal("subscription is not a complete Family VPN Xray configuration")
 	}

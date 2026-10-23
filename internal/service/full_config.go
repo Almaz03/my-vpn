@@ -45,7 +45,7 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 
 	directDomains := append([]string(nil), familyDirectDomains...)
 	config := map[string]any{
-		"remarks": "Family VPN",
+		"remarks": familyProxyTag,
 		"log":     map[string]any{"loglevel": "warning"},
 		"dns": map[string]any{
 			"queryStrategy": "UseIPv4",

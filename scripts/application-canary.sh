@@ -76,7 +76,7 @@ subscription_path="/${subscription#https://vpn.akalmaz.tech/}"
 printf 'url = "http://127.0.0.1:8080%s"\n' "$subscription_path" |
   curl --fail --silent --show-error --config - > "$work/subscription.txt"
 if jq -e '
-  (.remarks == "Family VPN") and
+	  (.remarks == "🇫🇮 Финляндия 🚀") and
   (.dns.queryStrategy == "UseIPv4") and
 	(.dns.tag == "dns_out") and
   ([.inbounds[]? | select(.protocol == "socks" and .port == 10808)] | length == 1) and

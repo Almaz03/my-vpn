@@ -162,7 +162,7 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 		Outbounds []any  `json:"outbounds"`
 	}
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &fullConfig) != nil ||
-		fullConfig.Remarks != "Family VPN" || len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 {
+		fullConfig.Remarks != "🇫🇮 Финляндия 🚀" || len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 {
 		t.Fatalf("subscription status=%d is not a full Xray configuration", response.Code)
 	}
 	if response.Header().Get("Cache-Control") != "no-store, private, max-age=0" ||
