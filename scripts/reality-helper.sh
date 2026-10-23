@@ -75,7 +75,7 @@ runtime_add() {
   chmod 0600 "$runtime_config"
   jq -n --arg id "$uuid" --arg email "$email" '{
     inbounds: [{
-      tag: "my-vpn-reality", protocol: "vless",
+      tag: "my-vpn-reality", listen: "127.0.0.1", port: 1, protocol: "vless",
       settings: {decryption: "none", clients: [{id: $id, flow: "xtls-rprx-vision", email: $email}]}
     }]
   }' > "$runtime_config"
@@ -85,7 +85,7 @@ runtime_add() {
 }
 runtime_remove() {
   local email="$1" output
-  output="$(xray api rmu --server="$api_server" --timeout=5 -tag=my-vpn-reality "$email")"
+  output="$(xray api rmu --server="$api_server" --timeout=5 -tag my-vpn-reality "$email")"
   grep -Fxq 'Removed 1 user(s) in total.' <<<"$output"
 }
 
