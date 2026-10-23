@@ -81,6 +81,42 @@ jobs:
           ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" \
             "tar -xzf '$remote_dir/bootstrap.tar.gz' -C '$remote_dir' && sudo bash '$remote_dir/scripts/bootstrap-server.sh' '$DEPLOY_PORT'"
 
+      - name: Configure isolated VPN edge controller
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          BOOTSTRAP_USER: ${{ secrets.DEPLOY_USER }}
+          EDGE_HOST: 217.147.13.228
+          EDGE_PORT: "22"
+          EDGE_HOST_FINGERPRINT: SHA256:QQQHyS6/uy4zs4m3EmbltV70eFVdPQFJwY5g8lAUEtU
+        run: |
+          set -euo pipefail
+          edge_known_hosts="$RUNNER_TEMP/edge-known-hosts"
+          edge_controller_env="$RUNNER_TEMP/edge-controller.env"
+          ssh-keyscan -T 15 -p "$EDGE_PORT" -t ed25519 "$EDGE_HOST" > "$edge_known_hosts" 2>/dev/null
+          actual_fingerprint="$(ssh-keygen -lf "$edge_known_hosts" -E sha256 | awk '{print $2}')"
+          [[ "$actual_fingerprint" == "$EDGE_HOST_FINGERPRINT" ]]
+          printf 'EDGE_HOST=%s\nEDGE_PORT=%s\nEDGE_USER=my-vpn-deploy\n' \
+            "$EDGE_HOST" "$EDGE_PORT" > "$edge_controller_env"
+          chmod 0600 "$edge_known_hosts" "$edge_controller_env"
+          remote_dir="/tmp/my-vpn-edge-controller-${GITHUB_SHA}"
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+          cleanup() {
+            ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" "rm -rf '$remote_dir'" || true
+          }
+          trap cleanup EXIT
+          ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" "umask 077; mkdir '$remote_dir'"
+          scp -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -P "$DEPLOY_PORT" \
+            "$HOME/.ssh/deploy_key" "$edge_known_hosts" "$edge_controller_env" \
+            "$BOOTSTRAP_USER@$DEPLOY_HOST:$remote_dir/"
+          ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" \
+            "sudo install -m 0600 -o root -g root '$remote_dir/deploy_key' /etc/my-vpn/edge-deploy-key && \
+             sudo install -m 0600 -o root -g root '$remote_dir/edge-known-hosts' /etc/my-vpn/edge-known-hosts && \
+             sudo install -m 0600 -o root -g root '$remote_dir/edge-controller.env' /etc/my-vpn/edge-controller.env"
+
       - name: Verify dedicated deployment login
         shell: bash
         env:
@@ -95,4 +131,4 @@ jobs:
       - name: Remove temporary SSH material
         if: always()
         shell: bash
-        run: rm -f "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
+        run: rm -f "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts" "$RUNNER_TEMP/edge-known-hosts" "$RUNNER_TEMP/edge-controller.env"

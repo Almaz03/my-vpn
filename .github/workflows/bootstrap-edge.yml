@@ -132,6 +132,48 @@ jobs:
             --connect-timeout 10 --max-time 15 "https://$EDGE_SNI/" | grep -Fxq ok
           echo 'VPN edge is ready; public metadata validated.'
 
+      - name: Verify Reality tunnel egress
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ inputs.edge_host }}
+          DEPLOY_PORT: ${{ inputs.edge_port }}
+        run: |
+          set -euo pipefail
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+          device_id="$(openssl rand -hex 16)"
+          cleanup() {
+            if [[ -n "${client_pid:-}" ]]; then kill "$client_pid" >/dev/null 2>&1 || true; fi
+            ssh "${ssh_args[@]}" "my-vpn-deploy@$DEPLOY_HOST" \
+              "sudo /usr/local/libexec/my-vpn/edge-user-helper remove '$device_id'" >/dev/null 2>&1 || true
+            rm -rf "$RUNNER_TEMP/edge-canary"
+          }
+          trap cleanup EXIT
+          metadata="$(ssh "${ssh_args[@]}" "my-vpn-deploy@$DEPLOY_HOST" \
+            "sudo /usr/local/libexec/my-vpn/edge-user-helper provision '$device_id'")"
+          work="$RUNNER_TEMP/edge-canary"
+          mkdir -p "$work"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            -o "$work/xray.zip" https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+          printf '%s  %s\n' 23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae "$work/xray.zip" | sha256sum --check -
+          unzip -q "$work/xray.zip" xray geoip.dat geosite.dat -d "$work"
+          jq '{
+            log:{loglevel:"warning"},
+            inbounds:[{listen:"127.0.0.1",port:11080,protocol:"socks",settings:{udp:false}}],
+            outbounds:[{protocol:"vless",settings:{vnext:[{address:.server,port:.port,users:[{id:.uuid,encryption:"none",flow:.flow}]}]},streamSettings:{network:"raw",security:"reality",realitySettings:{serverName:.sni,fingerprint:"chrome",publicKey:.public_key,shortId:.short_id}}}]
+          }' <<<"$metadata" > "$work/client.json"
+          "$work/xray" run -config "$work/client.json" >"$work/client.log" 2>&1 &
+          client_pid=$!
+          ready=false
+          for _ in {1..20}; do
+            if bash -c 'exec 3<>/dev/tcp/127.0.0.1/11080' 2>/dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          [[ "$ready" == true ]]
+          trace="$(curl --fail --silent --show-error --max-time 20 \
+            --socks5-hostname 127.0.0.1:11080 https://www.cloudflare.com/cdn-cgi/trace)"
+          grep -Fxq "ip=$DEPLOY_HOST" <<<"$trace"
+          echo 'Reality tunnel reached the Internet through the new edge.'
+
       - name: Remove temporary SSH material
         if: always()
         shell: bash

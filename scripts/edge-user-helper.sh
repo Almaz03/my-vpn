@@ -13,6 +13,19 @@ valid_device() { [[ "$1" =~ ^[0-9a-f]{32}$ ]]; }
 valid_uuid() { [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; }
 email_for() { printf 'device-%s' "$1"; }
 
+client_json() {
+  local device_id="$1" uuid
+  uuid="$(jq -r --arg email "$(email_for "$device_id")" '.inbounds[] | select(.tag=="my-vpn-reality") | .settings.clients[]? | select(.email==$email) | .id' "$config")"
+  [[ -n "$uuid" ]] || exit 1
+  jq -cn --arg device_id "$device_id" --arg uuid "$uuid" \
+    --arg server "$(sed -n 's/^XRAY_SERVER=//p' /etc/my-vpn/edge.env)" \
+    --arg port "$(sed -n 's/^XRAY_PORT=//p' /etc/my-vpn/edge.env)" \
+    --arg public_key "$(sed -n 's/^XRAY_PUBLIC_KEY=//p' /etc/my-vpn/edge.env)" \
+    --arg short_id "$(sed -n 's/^XRAY_SHORT_ID=//p' /etc/my-vpn/edge.env)" \
+    --arg sni "$(sed -n 's/^XRAY_SNI=//p' /etc/my-vpn/edge.env)" \
+    '{version:1,device_id:$device_id,uuid:$uuid,server:$server,port:($port|tonumber),public_key:$public_key,short_id:$short_id,sni:$sni,flow:"xtls-rprx-vision"}'
+}
+
 runtime_add() {
   local uuid="$1" email="$2" candidate output
   candidate="$(mktemp --suffix=.json /etc/xray/.edge-user.XXXXXX)"
@@ -40,6 +53,32 @@ exec 9>"$lock"
 flock -w 30 9
 
 case "$action" in
+  provision)
+    [[ $# -eq 2 ]] || exit 2
+    device_id="$2"
+    valid_device "$device_id" || exit 2
+    email="$(email_for "$device_id")"
+    existing="$(jq -r --arg email "$email" '.inbounds[] | select(.tag=="my-vpn-reality") | .settings.clients[]? | select(.email==$email) | .id' "$config")"
+    if [[ -z "$existing" ]]; then
+      uuid="$(xray uuid | tr -d '\r\n')"
+      valid_uuid "$uuid" || exit 1
+      candidate="$(mktemp --suffix=.json /etc/xray/.edge-config.XXXXXX)"
+      trap 'rm -f "$candidate"' EXIT
+      jq --arg id "$uuid" --arg email "$email" '(.inbounds[] | select(.tag=="my-vpn-reality") | .settings.clients) += [{id:$id,flow:"xtls-rprx-vision",email:$email}]' "$config" > "$candidate"
+      chown xray:xray "$candidate"
+      chmod 0640 "$candidate"
+      xray run -test -config "$candidate" >/dev/null
+      runtime_add "$uuid" "$email"
+      mv -f "$candidate" "$config"
+    fi
+    client_json "$device_id"
+    ;;
+  config)
+    [[ $# -eq 2 ]] || exit 2
+    device_id="$2"
+    valid_device "$device_id" || exit 2
+    client_json "$device_id"
+    ;;
   add)
     [[ $# -eq 3 ]] || exit 2
     device_id="$2"

@@ -18,6 +18,91 @@ request="$(head -c 65537)"
 (( ${#request} <= 65536 )) || exit 2
 jq -e 'type == "object" and .version == 1' <<<"$request" >/dev/null || exit 2
 
+edge_controller_env=/etc/my-vpn/edge-controller.env
+edge_private_key=/etc/my-vpn/edge-deploy-key
+edge_known_hosts=/etc/my-vpn/edge-known-hosts
+
+controller_env() {
+  local name="$1" value
+  value="$(sed -n "s/^${name}=//p" "$edge_controller_env")"
+  [[ -n "$value" && "$value" != *$'\n'* ]] || exit 1
+  printf '%s' "$value"
+}
+remote_edge() {
+  local remote_action="$1" device_id="$2" host port user
+  host="$(controller_env EDGE_HOST)"
+  port="$(controller_env EDGE_PORT)"
+  user="$(controller_env EDGE_USER)"
+  [[ "$host" =~ ^([A-Za-z0-9.-]+|[0-9]{1,3}(\.[0-9]{1,3}){3})$ ]]
+  [[ "$port" =~ ^[0-9]{1,5}$ ]]
+  [[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+  [[ "$remote_action" =~ ^(provision|config|remove)$ && "$device_id" =~ ^[0-9a-f]{32}$ ]]
+  ssh -F none -i "$edge_private_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$edge_known_hosts" \
+    -o ConnectTimeout=8 -p "$port" "$user@$host" \
+    sudo -- /usr/local/libexec/my-vpn/edge-user-helper "$remote_action" "$device_id"
+}
+remote_links() {
+  local response="$1" device_id="$2" uuid server port public_key short_id sni flow fragment uri encoded deep_link
+  jq -e --arg device_id "$device_id" '
+    .version == 1 and .device_id == $device_id and
+    (.uuid | test("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+    (.server | test("^[A-Za-z0-9.-]+$")) and (.port >= 1 and .port <= 65535) and
+    (.public_key | test("^[A-Za-z0-9_-]{43}$")) and
+    (.short_id | test("^[0-9a-f]{16}$")) and
+    (.sni | test("^[A-Za-z0-9.-]+$")) and .flow == "xtls-rprx-vision"
+  ' <<<"$response" >/dev/null
+  uuid="$(jq -r .uuid <<<"$response")"
+  server="$(jq -r .server <<<"$response")"
+  port="$(jq -r .port <<<"$response")"
+  public_key="$(jq -r .public_key <<<"$response")"
+  short_id="$(jq -r .short_id <<<"$response")"
+  sni="$(jq -r .sni <<<"$response")"
+  flow="$(jq -r .flow <<<"$response")"
+  fragment="Family-VPN-${device_id:0:8}"
+  uri="vless://${uuid}@${server}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=raw#${fragment}"
+  encoded="$(printf '%s' "$uri" | base64 -w 0)"
+  deep_link="incy://import/${encoded}"
+  printf '%s\n%s\n' "$uri" "$deep_link"
+}
+
+if [[ -f "$edge_controller_env" || -f "$edge_private_key" || -f "$edge_known_hosts" ]]; then
+  test -f "$edge_controller_env" -a -f "$edge_private_key" -a -f "$edge_known_hosts"
+  case "$action" in
+    provision)
+      device_id="$(jq -r '.device_id // empty' <<<"$request")"
+      [[ "$device_id" =~ ^[0-9a-f]{32}$ ]] || exit 2
+      jq -e '
+        (.relative_name | type == "string" and length > 0 and length <= 100) and
+        (.device_name | type == "string" and length > 0 and length <= 100) and
+        (.platform | IN("android", "ios", "ipad", "windows", "macos", "linux"))
+      ' <<<"$request" >/dev/null || exit 2
+      response="$(remote_edge provision "$device_id")"
+      mapfile -t links < <(remote_links "$response" "$device_id")
+      jq -cn --arg link "${links[1]}" --arg path "/api/v1/devices/$device_id/config" \
+        '{version:1,state:"active",incy_deep_link:$link,config_path:$path}'
+      ;;
+    config)
+      credential="$(jq -r '.credential_ref // empty' <<<"$request")"
+      [[ "$credential" =~ ^vless-reality:([0-9a-f]{32})$ ]] || exit 2
+      device_id="${BASH_REMATCH[1]}"
+      # Provision-on-read migrates pre-edge active devices without changing
+      # their portal subscription URL or database credential reference.
+      response="$(remote_edge provision "$device_id")"
+      mapfile -t links < <(remote_links "$response" "$device_id")
+      jq -cn --arg uri "${links[0]}" --arg link "${links[1]}" \
+        '{version:1,vless_uri:$uri,incy_deep_link:$link}'
+      ;;
+    revoke)
+      credential="$(jq -r '.credential_ref // empty' <<<"$request")"
+      [[ "$credential" =~ ^vless-reality:([0-9a-f]{32})$ ]] || exit 2
+      remote_edge remove "${BASH_REMATCH[1]}" >/dev/null
+      jq -cn '{version:1,state:"revoked"}'
+      ;;
+  esac
+  exit 0
+fi
+
 get_env() {
   local name="$1" value
   value="$(sed -n "s/^${name}=//p" "$client_env")"

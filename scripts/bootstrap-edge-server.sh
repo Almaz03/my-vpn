@@ -75,6 +75,15 @@ else
   grep -Fxq "XRAY_SERVER=$edge_ip" /etc/my-vpn/edge.env
   grep -Fxq "XRAY_SNI=$edge_sni" /etc/my-vpn/edge.env
 fi
+# Keep public egress on IPv4. This avoids clients receiving an IPv6 route that
+# the edge or the mobile network cannot carry consistently.
+ipv4_candidate="$(mktemp --suffix=.json /etc/xray/.ipv4-config.XXXXXX)"
+jq '(.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.domainStrategy) = "ForceIPv4"' \
+  /etc/xray/config.json > "$ipv4_candidate"
+chown xray:xray "$ipv4_candidate"
+chmod 0640 "$ipv4_candidate"
+xray run -test -config "$ipv4_candidate" >/dev/null
+mv -f "$ipv4_candidate" /etc/xray/config.json
 xray run -test -config /etc/xray/config.json >/dev/null
 
 install -d -m 0755 /etc/caddy/conf.d
