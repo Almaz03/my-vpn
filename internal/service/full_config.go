@@ -52,7 +52,7 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 				"1.1.1.1",
 				map[string]any{"address": "77.88.8.8", "domains": directDomains},
 			},
-			"tag": "dns-out",
+			"tag": "dns_out",
 		},
 		"inbounds": []any{
 			map[string]any{
@@ -99,6 +99,9 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 		"routing": map[string]any{
 			"domainStrategy": "IPIfNonMatch",
 			"rules": []any{
+				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "ip": []string{"77.88.8.8"}, "outboundTag": "direct"},
+				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "outboundTag": "family-proxy"},
+				map[string]any{"type": "field", "port": 53, "outboundTag": "dns-out"},
 				map[string]any{"type": "field", "ip": privateNetworks, "outboundTag": "direct"},
 				map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
 				map[string]any{"type": "field", "domain": directDomains, "outboundTag": "direct"},
