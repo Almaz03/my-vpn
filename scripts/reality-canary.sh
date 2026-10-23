@@ -41,7 +41,7 @@ config_request="$(jq -cn --arg credential "vless-reality:$device_id" '{version:1
 config_response="$(printf '%s' "$config_request" | /usr/local/libexec/my-vpn/reality-helper config)"
 [[ "$(jq -r '.vless_uris | length' <<<"$config_response")" == 2 ]]
 test_edge() {
-  local index="$1" uri authority uuid server_and_query server_authority server server_port
+  local index="$1" uri authority uuid server_and_query server_authority server client_server server_port
   local query public_key short_id sni port ready
   uri="$(jq -er --argjson index "$index" '.vless_uris[$index] | select(startswith("vless://"))' <<<"$config_response")"
   authority="${uri#vless://}"
@@ -58,13 +58,18 @@ test_edge() {
   [[ "$uuid" =~ ^[0-9a-f-]{36}$ && "$server" =~ ^[A-Za-z0-9.-]+$ ]]
   [[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ && "$short_id" =~ ^[0-9a-f]{16}$ ]]
   [[ "$server_port" =~ ^[0-9]{1,5}$ ]] && ((server_port >= 1 && server_port <= 65535))
+  client_server="$server"
+  # The control plane is itself the LT edge. Some providers do not implement
+  # public-IP hairpin NAT, so exercise the same listener through loopback while
+  # still asserting that Cloudflare observes the configured LT egress IP.
+  if ((index == 0)); then client_server=127.0.0.1; fi
   port=$((18090 + index))
   while ss -H -ltn "sport = :$port" | grep -q .; do
     ((port++))
     ((port < 18150))
   done
 
-  jq -n --arg id "$uuid" --arg server "$server" --arg public_key "$public_key" --arg short_id "$short_id" \
+  jq -n --arg id "$uuid" --arg server "$client_server" --arg public_key "$public_key" --arg short_id "$short_id" \
     --arg sni "$sni" --argjson port "$port" --argjson server_port "$server_port" '{
     log: {loglevel:"warning"},
     inbounds:[{
