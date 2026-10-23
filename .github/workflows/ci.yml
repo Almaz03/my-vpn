@@ -63,6 +63,14 @@ jobs:
             node --check "$file"
           done < <(find web -type f -name '*.js' -print0)
 
+      - name: Check shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(find scripts -type f -name '*.sh' -print0)
+
       - name: Reject obvious committed secrets
         shell: bash
         run: |

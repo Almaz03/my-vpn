@@ -1,0 +1,2 @@
+Defaults:my-vpn-deploy !requiretty
+my-vpn-deploy ALL=(root) NOPASSWD: /usr/local/libexec/my-vpn/edge-user-helper *

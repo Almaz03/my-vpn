@@ -1,0 +1,7 @@
+{
+	https_port 8444
+}
+
+{$EDGE_SNI} {
+	respond "ok" 200
+}

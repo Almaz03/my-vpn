@@ -1,0 +1,116 @@
+name: Bootstrap VPN edge
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment containing this edge's DEPLOY_* secrets
+        required: true
+        type: string
+        default: production-edge-2
+      edge_sni:
+        description: Dedicated DNS name already pointing at the edge (for example tcp2.vpn.akalmaz.tech)
+        required: true
+        type: string
+      confirm:
+        description: Type BOOTSTRAP-EDGE
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-bootstrap-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: inputs.confirm == 'BOOTSTRAP-EDGE'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Check out pinned source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Validate target and configure SSH
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          EDGE_SNI: ${{ inputs.edge_sni }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_HOST" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          [[ "$EDGE_SNI" =~ ^[a-z0-9.-]+$ && "$EDGE_SNI" == *.* ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh-keygen -lf "$HOME/.ssh/deploy_key" >/dev/null
+          ssh-keygen -lf "$HOME/.ssh/known_hosts"
+          known_host="$DEPLOY_HOST"
+          [[ "$DEPLOY_PORT" == 22 ]] || known_host="[$DEPLOY_HOST]:$DEPLOY_PORT"
+          ssh-keygen -F "$known_host" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: Build immutable edge bootstrap bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/edge-bootstrap"
+          mkdir -p "$bundle/scripts" "$bundle/deploy"
+          cp scripts/bootstrap-edge-server.sh scripts/edge-user-helper.sh "$bundle/scripts/"
+          cp deploy/xray.service deploy/edge.Caddyfile deploy/my-vpn-edge.sudoers "$bundle/deploy/"
+          ssh-keygen -y -f "$HOME/.ssh/deploy_key" > "$bundle/deploy-authorized-key.pub"
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -C "$bundle" -czf "$RUNNER_TEMP/edge-bootstrap.tar.gz" .
+
+      - name: Install isolated VPN data plane
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          BOOTSTRAP_USER: ${{ secrets.DEPLOY_USER }}
+          EDGE_SNI: ${{ inputs.edge_sni }}
+        run: |
+          set -euo pipefail
+          [[ "$BOOTSTRAP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+          [[ "$EDGE_SNI" =~ ^[a-z0-9.-]+$ && "$EDGE_SNI" == *.* ]]
+          remote_dir="/tmp/my-vpn-edge-${GITHUB_SHA}"
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+          cleanup() { ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" "rm -rf '$remote_dir'" || true; }
+          trap cleanup EXIT
+          ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" "umask 077; mkdir '$remote_dir'"
+          scp -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -P "$DEPLOY_PORT" \
+            "$RUNNER_TEMP/edge-bootstrap.tar.gz" "$BOOTSTRAP_USER@$DEPLOY_HOST:$remote_dir/"
+          ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" \
+            "tar -xzf '$remote_dir/edge-bootstrap.tar.gz' -C '$remote_dir' && sudo bash '$remote_dir/scripts/bootstrap-edge-server.sh' '$DEPLOY_PORT' '$DEPLOY_HOST' '$EDGE_SNI'"
+
+      - name: Verify edge management and public listeners
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          EDGE_SNI: ${{ inputs.edge_sni }}
+        run: |
+          set -euo pipefail
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p "$DEPLOY_PORT")
+          metadata="$(ssh "${ssh_args[@]}" "my-vpn-deploy@$DEPLOY_HOST" 'sudo /usr/local/libexec/my-vpn/edge-user-helper metadata')"
+          jq -e --arg host "$DEPLOY_HOST" --arg sni "$EDGE_SNI" '
+            .server == $host and .port == 443 and .sni == $sni and
+            (.public_key | test("^[A-Za-z0-9_-]{43}$")) and
+            (.short_id | test("^[0-9a-f]{16}$"))
+          ' <<<"$metadata" >/dev/null
+          timeout 10 bash -c 'exec 3<>/dev/tcp/$1/443' _ "$DEPLOY_HOST"
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 3 \
+            --connect-timeout 10 --max-time 15 "https://$EDGE_SNI/" | grep -Fxq ok
+          echo 'VPN edge is ready; public metadata validated.'
+
+      - name: Remove temporary SSH material
+        if: always()
+        shell: bash
+        run: rm -rf "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts" "$RUNNER_TEMP/edge-bootstrap" "$RUNNER_TEMP/edge-bootstrap.tar.gz"
