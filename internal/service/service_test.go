@@ -18,6 +18,23 @@ import (
 
 type failingProvisioner struct{}
 
+func subscriptionFromNPVDeepLink(t *testing.T, deepLink string) (*url.URL, string) {
+	t.Helper()
+	link, err := url.Parse(deepLink)
+	if err != nil || link.Scheme != "npv" || link.Host != "subscribe" {
+		t.Fatalf("invalid Npv deep link: %q err=%v", deepLink, err)
+	}
+	subscription, err := url.Parse(link.Query().Get("url"))
+	if err != nil || subscription.Scheme != "https" || subscription.Host == "" {
+		t.Fatalf("invalid subscription URL in %q: %v", deepLink, err)
+	}
+	token := strings.TrimPrefix(subscription.Path, "/s/")
+	if token == subscription.Path || token == "" {
+		t.Fatalf("invalid subscription path: %q", subscription.Path)
+	}
+	return subscription, token
+}
+
 func (failingProvisioner) Provision(context.Context, provision.DeviceRequest) (provision.Result, error) {
 	return provision.Result{}, errors.New("offline")
 }
@@ -209,11 +226,10 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const prefix = "hiddify://import/https://vpn.example.test/s/"
-	if !strings.HasPrefix(activation.ClientDeepLink, prefix) || strings.Contains(activation.ClientDeepLink, "vless://") {
+	if !strings.HasPrefix(activation.ClientDeepLink, "npv://subscribe?url=") || strings.Contains(activation.ClientDeepLink, "vless://") {
 		t.Fatalf("unsafe activation deep link: %q", activation.ClientDeepLink)
 	}
-	token := strings.TrimSuffix(strings.TrimPrefix(activation.ClientDeepLink, prefix), "#Family%20VPN")
+	_, token := subscriptionFromNPVDeepLink(t, activation.ClientDeepLink)
 	payload, err := application.Subscription(context.Background(), token)
 	if err != nil || payload.ContentType != "application/json; charset=utf-8" {
 		t.Fatalf("subscription err=%v content-type=%q", err, payload.ContentType)
@@ -284,9 +300,8 @@ func TestSeparateClientsHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T
 	if activations[0].ClientDeepLink == activations[1].ClientDeepLink || activations[0].Device.ID == activations[1].Device.ID {
 		t.Fatal("devices did not receive unique identities and subscriptions")
 	}
-	const prefix = "hiddify://import/https://vpn.example.test/s/"
-	firstToken := strings.TrimSuffix(strings.TrimPrefix(activations[0].ClientDeepLink, prefix), "#Family%20VPN")
-	secondToken := strings.TrimSuffix(strings.TrimPrefix(activations[1].ClientDeepLink, prefix), "#Family%20VPN")
+	_, firstToken := subscriptionFromNPVDeepLink(t, activations[0].ClientDeepLink)
+	_, secondToken := subscriptionFromNPVDeepLink(t, activations[1].ClientDeepLink)
 	if _, err := application.Revoke(context.Background(), activations[0].Device.ID); err != nil {
 		t.Fatal(err)
 	}

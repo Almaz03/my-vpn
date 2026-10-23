@@ -10,11 +10,19 @@
   };
 
   const PLATFORM_HINTS = {
-    android: 'Установите Hiddify из официального источника. Android попросит разрешить VPN-подключение.',
-    ios: 'Установите Hiddify из App Store, затем подтвердите добавление VPN-конфигурации.',
-    windows: 'Установите Hiddify для Windows и подтвердите импорт профиля в приложении.',
-    macos: 'Установите Hiddify для macOS и разрешите добавление VPN-конфигурации в настройках системы.',
-    linux: 'Откройте официальный сайт Hiddify и выберите пакет для вашего дистрибутива.'
+    android: 'Установите NapsternetV из Google Play и разрешите VPN-подключение.',
+    ios: 'Установите Npv Tunnel из российского App Store, затем подтвердите добавление VPN-конфигурации.',
+    windows: 'Установите Hiddify для Windows, затем скачайте и откройте конфигурацию.',
+    macos: 'Установите Hiddify для macOS, затем скачайте и откройте конфигурацию.',
+    linux: 'Установите Hiddify для Linux, затем скачайте и откройте конфигурацию.'
+  };
+
+  const PLATFORM_CLIENTS = {
+    ios: {name: 'Npv Tunnel', url: 'https://apps.apple.com/ru/app/npv-tunnel/id1629465476', label: 'Открыть в App Store'},
+    android: {name: 'NapsternetV', url: 'https://play.google.com/store/apps/details?id=com.napsternetlabs.napsternetv', label: 'Открыть в Google Play'},
+    windows: {name: 'Hiddify', url: 'https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Windows-Setup-x64.exe', label: 'Скачать для Windows'},
+    macos: {name: 'Hiddify', url: 'https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-MacOS.dmg', label: 'Скачать для macOS'},
+    linux: {name: 'Hiddify', url: 'https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Linux-x64-AppImage.AppImage', label: 'Скачать для Linux'}
   };
 
   const form = document.querySelector('#activation-form');
@@ -29,6 +37,8 @@
   const resultTitle = document.querySelector('#result-title');
   const resultMessage = document.querySelector('#result-message');
   const installHint = document.querySelector('#install-hint');
+  const installTitle = document.querySelector('#install-title');
+  const installLink = document.querySelector('#install-link');
   const importHint = document.querySelector('#import-hint');
   const importButton = document.querySelector('#import-button');
   const downloadLink = document.querySelector('#download-link');
@@ -250,6 +260,11 @@
   function selectPlatform(value) {
     platform = Object.hasOwn(PLATFORM_NAMES, value) ? value : 'linux';
     platformLabel.textContent = PLATFORM_NAMES[platform];
+    const client = PLATFORM_CLIENTS[platform];
+    installTitle.textContent = `Установите ${client.name}`;
+    installLink.href = client.url;
+    installLink.textContent = client.label;
+    importButton.textContent = `Открыть в ${client.name}`;
     const radio = platformPicker.querySelector(`input[value="${platform}"]`);
     if (radio) radio.checked = true;
   }
@@ -400,7 +415,7 @@
   function renderResult(data) {
     clearAccessRequestToken();
     clearStatus();
-    deepLink = safeDeepLink(data.client_deep_link);
+    deepLink = platform === 'ios' || platform === 'android' ? safeDeepLink(data.client_deep_link) : '';
     const downloadUrl = safeLocalUrl(data.config_download_url);
     const qrUrl = safeImageUrl(data.qr_code_url);
     const profileAvailable = Boolean(deepLink || downloadUrl || qrUrl);
@@ -409,7 +424,7 @@
     resultMessage.textContent = typeof data.message === 'string' && data.message.length <= 180
       ? data.message
       : profileAvailable
-        ? 'Установите Hiddify и импортируйте созданный профиль.'
+        ? `Установите ${PLATFORM_CLIENTS[platform].name} и импортируйте созданный профиль.`
         : 'Профиль ещё не выдан. Администратор завершит подготовку подключения.';
     installHint.textContent = PLATFORM_HINTS[platform];
     importHint.textContent = profileAvailable
@@ -433,7 +448,15 @@
 
   function safeDeepLink(value) {
     if (typeof value !== 'string' || value.length > 4096) return '';
-    return /^hiddify:\/\/import\/[A-Za-z0-9._~!$&'()*+,;=:@/?#%-]+$/.test(value) ? value : '';
+    try {
+      const link = new URL(value);
+      if (link.protocol !== 'npv:' || link.hostname !== 'subscribe' || [...link.searchParams.keys()].some((key) => key !== 'url')) return '';
+      const subscription = new URL(link.searchParams.get('url') || '');
+      if (subscription.origin !== window.location.origin || !/^\/s\/[A-Za-z0-9_-]{43}$/.test(subscription.pathname)) return '';
+      return value;
+    } catch {
+      return '';
+    }
   }
 
   function safeLocalUrl(value) {

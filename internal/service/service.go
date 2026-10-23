@@ -284,7 +284,7 @@ func (s *Service) Activate(ctx context.Context, code, platform, requestedDeviceN
 	activation.Device.State = result.State
 	if result.State == "active" {
 		subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + subscriptionToken}).String()
-		activation.ClientDeepLink = hiddifyDeepLink(subscriptionURL)
+		activation.ClientDeepLink = npvDeepLink(subscriptionURL)
 		activation.ConfigDownloadURL = subscriptionURL + "?download=1"
 		activation.QRCodeURL = subscriptionURL + "/qr"
 	}
@@ -336,11 +336,11 @@ func (s *Service) RoutingProfileURL() string {
 
 func (s *Service) SubscriptionDeepLink(token string) string {
 	subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + token}).String()
-	return hiddifyDeepLink(subscriptionURL)
+	return npvDeepLink(subscriptionURL)
 }
 
-func hiddifyDeepLink(subscriptionURL string) string {
-	return "hiddify://import/" + subscriptionURL + "#Family%20VPN"
+func npvDeepLink(subscriptionURL string) string {
+	return "npv://subscribe?url=" + url.QueryEscape(subscriptionURL)
 }
 
 func (s *Service) RoutingProfile() RoutingProfile {

@@ -146,14 +146,18 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &activation) != nil {
 		t.Fatalf("activate status=%d body=%s", response.Code, response.Body.String())
 	}
-	const prefix = "hiddify://import/https://vpn.example.test"
-	if !strings.HasPrefix(activation.DeepLink, prefix+"/s/") || !strings.HasSuffix(activation.DeepLink, "#Family%20VPN") {
+	deepLink, err := url.Parse(activation.DeepLink)
+	if err != nil || deepLink.Scheme != "npv" || deepLink.Host != "subscribe" {
 		t.Fatalf("unsafe deep link=%q", activation.DeepLink)
 	}
 	if !strings.HasPrefix(activation.QRCode, "https://vpn.example.test/s/") || !strings.HasSuffix(activation.QRCode, "/qr") {
 		t.Fatalf("unsafe QR URL=%q", activation.QRCode)
 	}
-	subscriptionPath := strings.TrimSuffix(strings.TrimPrefix(activation.DeepLink, prefix), "#Family%20VPN")
+	subscriptionURL, err := url.Parse(deepLink.Query().Get("url"))
+	if err != nil || subscriptionURL.Host != "vpn.example.test" || !strings.HasPrefix(subscriptionURL.Path, "/s/") {
+		t.Fatalf("unsafe subscription URL in deep link=%q", activation.DeepLink)
+	}
+	subscriptionPath := subscriptionURL.RequestURI()
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, subscriptionPath, nil))
 	var fullConfig struct {

@@ -3,7 +3,8 @@
 Семейный VPN с одобрением через Telegram и установкой профиля в один клик.
 Пользователь запрашивает доступ на `https://vpn.akalmaz.tech`, администратор
 нажимает «Одобрить» в боте, а одноразовый код создаёт отдельный профиль
-[Hiddify](https://hiddify.com/app/).
+[Npv Tunnel](https://apps.apple.com/ru/app/npv-tunnel/id1629465476) на iOS,
+NapsternetV на Android и Hiddify на настольных системах.
 
 Профиль содержит два VLESS Vision + Reality edge:
 
