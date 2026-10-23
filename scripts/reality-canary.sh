@@ -39,34 +39,33 @@ rm -f "$work/provision.json"
 
 config_request="$(jq -cn --arg credential "vless-reality:$device_id" '{version:1,credential_ref:$credential}')"
 config_response="$(printf '%s' "$config_request" | /usr/local/libexec/my-vpn/reality-helper config)"
-uri="$(jq -er '.vless_uri | select(startswith("vless://"))' <<<"$config_response")"
-authority="${uri#vless://}"
-uuid="${authority%%@*}"
-server_and_query="${authority#*@}"
-server_authority="${server_and_query%%\?*}"
-server="${server_authority%:*}"
-server_port="${server_authority##*:}"
-query="${server_and_query#*\?}"
-query="${query%%#*}"
-query_value() { tr '&' '\n' <<<"$query" | sed -n "s/^$1=//p" | head -n 1; }
-public_key="$(query_value pbk)"
-short_id="$(query_value sid)"
-sni="$(query_value sni)"
-[[ "$uuid" =~ ^[0-9a-f-]{36}$ && "$server" =~ ^[A-Za-z0-9.-]+$ ]]
-[[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ && "$short_id" =~ ^[0-9a-f]{16}$ ]]
-[[ "$server_port" =~ ^[0-9]{1,5}$ ]] && (( server_port >= 1 && server_port <= 65535 ))
-client_server="$server"
-if [[ ! -f /etc/my-vpn/edge-controller.env ]]; then
-  client_server=127.0.0.1
-fi
-port=18090
-while ss -H -ltn "sport = :$port" | grep -q .; do
-  ((port++))
-  ((port < 18150))
-done
+[[ "$(jq -r '.vless_uris | length' <<<"$config_response")" == 2 ]]
+test_edge() {
+  local index="$1" uri authority uuid server_and_query server_authority server server_port
+  local query public_key short_id sni port ready
+  uri="$(jq -er --argjson index "$index" '.vless_uris[$index] | select(startswith("vless://"))' <<<"$config_response")"
+  authority="${uri#vless://}"
+  uuid="${authority%%@*}"
+  server_and_query="${authority#*@}"
+  server_authority="${server_and_query%%\?*}"
+  server="${server_authority%:*}"
+  server_port="${server_authority##*:}"
+  query="${server_and_query#*\?}"
+  query="${query%%#*}"
+  public_key="$(tr '&' '\n' <<<"$query" | sed -n 's/^pbk=//p' | head -n 1)"
+  short_id="$(tr '&' '\n' <<<"$query" | sed -n 's/^sid=//p' | head -n 1)"
+  sni="$(tr '&' '\n' <<<"$query" | sed -n 's/^sni=//p' | head -n 1)"
+  [[ "$uuid" =~ ^[0-9a-f-]{36}$ && "$server" =~ ^[A-Za-z0-9.-]+$ ]]
+  [[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ && "$short_id" =~ ^[0-9a-f]{16}$ ]]
+  [[ "$server_port" =~ ^[0-9]{1,5}$ ]] && ((server_port >= 1 && server_port <= 65535))
+  port=$((18090 + index))
+  while ss -H -ltn "sport = :$port" | grep -q .; do
+    ((port++))
+    ((port < 18150))
+  done
 
-jq -n --arg id "$uuid" --arg server "$client_server" --arg public_key "$public_key" --arg short_id "$short_id" \
-  --arg sni "$sni" --argjson port "$port" --argjson server_port "$server_port" '{
+  jq -n --arg id "$uuid" --arg server "$server" --arg public_key "$public_key" --arg short_id "$short_id" \
+    --arg sni "$sni" --argjson port "$port" --argjson server_port "$server_port" '{
     log: {loglevel:"warning"},
     inbounds:[{
       listen:"127.0.0.1", port:$port, protocol:"socks",
@@ -85,26 +84,30 @@ jq -n --arg id "$uuid" --arg server "$client_server" --arg public_key "$public_k
         }
       }
     }]
-  }' > "$work/client.json"
+  }' > "$work/client-$index.json"
+  chown xray:xray "$work/client-$index.json"
+  chmod 0600 "$work/client-$index.json"
+  runuser -u xray -- /usr/local/bin/xray run -config "$work/client-$index.json" >/dev/null 2>&1 &
+  client_pid=$!
+  ready=false
+  for _ in {1..20}; do
+    if ss -H -ltn "sport = :$port" | grep -q .; then ready=true; break; fi
+    sleep 0.25
+  done
+  [[ "$ready" == true ]]
+  curl --fail --silent --show-error --max-time 15 \
+    --proxy "socks5h://127.0.0.1:$port" \
+    --output "$work/trace-$index.txt" \
+    https://www.cloudflare.com/cdn-cgi/trace
+  grep -Fxq "ip=$server" "$work/trace-$index.txt"
+  kill "$client_pid" >/dev/null 2>&1 || true
+  wait "$client_pid" >/dev/null 2>&1 || true
+  client_pid=""
+  echo "VLESS Reality edge $index egress canary passed"
+}
+
 chown root:xray "$work"
 chmod 0750 "$work"
-chown xray:xray "$work/client.json"
-chmod 0600 "$work/client.json"
-runuser -u xray -- /usr/local/bin/xray run -config "$work/client.json" >/dev/null 2>&1 &
-client_pid=$!
-
-ready=false
-for _ in {1..20}; do
-  if ss -H -ltn "sport = :$port" | grep -q .; then
-    ready=true
-    break
-  fi
-  sleep 0.25
-done
-[[ "$ready" == true ]]
-curl --fail --silent --show-error --max-time 15 \
-  --proxy "socks5h://127.0.0.1:$port" \
-  --output "$work/trace.txt" \
-  https://www.cloudflare.com/cdn-cgi/trace
-grep -Eq '^ip=[0-9a-fA-F:.]+$' "$work/trace.txt"
-echo "VLESS Reality egress canary passed"
+test_edge 0
+test_edge 1
+echo "dual-edge VLESS Reality egress canary passed"

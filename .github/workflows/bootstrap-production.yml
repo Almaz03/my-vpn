@@ -47,7 +47,7 @@ jobs:
           cp scripts/bootstrap-server.sh scripts/install-release.sh scripts/rollback.sh \
             scripts/deactivate-release.sh scripts/backup.sh scripts/restore-backup.sh \
             scripts/release-helper.sh scripts/reality-helper.sh scripts/reality-canary.sh \
-            scripts/application-canary.sh "$bundle/scripts/"
+            scripts/edge-user-helper.sh scripts/application-canary.sh "$bundle/scripts/"
           cp deploy/Caddyfile deploy/my-vpn.service deploy/my-vpn-backup.service \
             deploy/my-vpn-backup.timer deploy/xray.service deploy/my-vpn.sudoers \
             "$bundle/deploy/"
@@ -94,13 +94,15 @@ jobs:
         run: |
           set -euo pipefail
           edge_known_hosts="$RUNNER_TEMP/edge-known-hosts"
-          edge_controller_env="$RUNNER_TEMP/edge-controller.env"
+          edges_json="$RUNNER_TEMP/edges.json"
           ssh-keyscan -T 15 -p "$EDGE_PORT" -t ed25519 "$EDGE_HOST" > "$edge_known_hosts" 2>/dev/null
           actual_fingerprint="$(ssh-keygen -lf "$edge_known_hosts" -E sha256 | awk '{print $2}')"
           [[ "$actual_fingerprint" == "$EDGE_HOST_FINGERPRINT" ]]
-          printf 'EDGE_HOST=%s\nEDGE_PORT=%s\nEDGE_USER=my-vpn-deploy\n' \
-            "$EDGE_HOST" "$EDGE_PORT" > "$edge_controller_env"
-          chmod 0600 "$edge_known_hosts" "$edge_controller_env"
+          jq -n --arg host "$EDGE_HOST" --argjson port "$EDGE_PORT" '[
+            {id:"lt",mode:"local"},
+            {id:"fi",mode:"ssh",host:$host,port:$port,user:"my-vpn-deploy"}
+          ]' > "$edges_json"
+          chmod 0600 "$edge_known_hosts" "$edges_json"
           remote_dir="/tmp/my-vpn-edge-controller-${GITHUB_SHA}"
           ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
@@ -112,12 +114,12 @@ jobs:
           ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" "umask 077; mkdir '$remote_dir'"
           scp -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -P "$DEPLOY_PORT" \
-            "$HOME/.ssh/deploy_key" "$edge_known_hosts" "$edge_controller_env" \
+            "$HOME/.ssh/deploy_key" "$edge_known_hosts" "$edges_json" \
             "$BOOTSTRAP_USER@$DEPLOY_HOST:$remote_dir/"
           ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" \
             "sudo install -m 0600 -o root -g root '$remote_dir/deploy_key' /etc/my-vpn/edge-deploy-key && \
              sudo install -m 0600 -o root -g root '$remote_dir/edge-known-hosts' /etc/my-vpn/edge-known-hosts && \
-             sudo install -m 0600 -o root -g root '$remote_dir/edge-controller.env' /etc/my-vpn/edge-controller.env"
+             sudo install -m 0600 -o root -g root '$remote_dir/edges.json' /etc/my-vpn/edges.json"
 
       - name: Verify control-plane provisioning through edge
         shell: bash
@@ -149,7 +151,9 @@ jobs:
             <<<"$provisioned" >/dev/null
           request="$(jq -cn --arg credential "vless-reality:$device_id" '{version:1,credential_ref:$credential}')"
           configured="$(invoke_helper config "$request")"
-          jq -e '.version == 1 and (.vless_uri | startswith("vless://") and contains("@217.147.13.228:443?") and contains("security=reality"))' \
+          jq -e '.version == 1 and (.vless_uris | length == 2) and
+            all(.vless_uris[]; startswith("vless://") and contains(":443?") and contains("security=reality")) and
+            any(.vless_uris[]; contains("@217.147.13.228:443?"))' \
             <<<"$configured" >/dev/null
           cleanup
           trap - EXIT
@@ -169,4 +173,4 @@ jobs:
       - name: Remove temporary SSH material
         if: always()
         shell: bash
-        run: rm -f "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts" "$RUNNER_TEMP/edge-known-hosts" "$RUNNER_TEMP/edge-controller.env"
+        run: rm -f "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts" "$RUNNER_TEMP/edge-known-hosts" "$RUNNER_TEMP/edges.json"

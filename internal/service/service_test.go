@@ -35,9 +35,10 @@ func (p *subscriptionProvisioner) Provision(_ context.Context, request provision
 	}
 	credential := "vless-reality:" + request.DeviceID
 	uuid := "00000000-0000-4000-8000-" + request.DeviceID[:12]
-	uri := "vless://" + uuid + "@vpn.example.test:8443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&fp=chrome&pbk=public&sid=abcd#Family"
-	p.configs[credential] = provision.ClientConfig{VLESSURI: uri, INCYDeepLink: "incy://import/test"}
-	return provision.Result{CredentialRef: credential, State: "active", INCYDeepLink: "incy://import/test"}, nil
+	ltURI := "vless://" + uuid + "@lt.example.test:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=lt.example.test&fp=chrome&pbk=public&sid=abcd#LT"
+	fiURI := "vless://" + uuid + "@fi.example.test:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=fi.example.test&fp=chrome&pbk=public&sid=abcd#FI"
+	p.configs[credential] = provision.ClientConfig{VLESSURIs: []string{ltURI, fiURI}}
+	return provision.Result{CredentialRef: credential, State: "active", ConfigPath: "/api/v1/devices/" + request.DeviceID + "/config"}, nil
 }
 
 func (p *subscriptionProvisioner) Revoke(_ context.Context, credential string) error {
@@ -208,11 +209,11 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const prefix = "incy://add/https://vpn.example.test/s/"
-	if !strings.HasPrefix(activation.INCYDeepLink, prefix) || strings.Contains(activation.INCYDeepLink, "vless://") {
-		t.Fatalf("unsafe activation deep link: %q", activation.INCYDeepLink)
+	const prefix = "hiddify://import/https://vpn.example.test/s/"
+	if !strings.HasPrefix(activation.ClientDeepLink, prefix) || strings.Contains(activation.ClientDeepLink, "vless://") {
+		t.Fatalf("unsafe activation deep link: %q", activation.ClientDeepLink)
 	}
-	token := strings.TrimPrefix(activation.INCYDeepLink, prefix)
+	token := strings.TrimSuffix(strings.TrimPrefix(activation.ClientDeepLink, prefix), "#Family%20VPN")
 	payload, err := application.Subscription(context.Background(), token)
 	if err != nil || payload.ContentType != "application/json; charset=utf-8" {
 		t.Fatalf("subscription err=%v content-type=%q", err, payload.ContentType)
@@ -225,8 +226,8 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 			Rules []any `json:"rules"`
 		} `json:"routing"`
 	}
-	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.Remarks != "🇫🇮 Финляндия 🚀" ||
-		len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 4 || len(fullConfig.Routing.Rules) < 1 {
+	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.Remarks != "Family VPN · LT + FI" ||
+		len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 5 || len(fullConfig.Routing.Rules) < 1 {
 		t.Fatal("subscription is not a complete Family VPN Xray configuration")
 	}
 	if err := database.Close(); err != nil {
@@ -280,11 +281,12 @@ func TestSeparateClientsHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T
 		}
 		activations = append(activations, activation)
 	}
-	if activations[0].INCYDeepLink == activations[1].INCYDeepLink || activations[0].Device.ID == activations[1].Device.ID {
+	if activations[0].ClientDeepLink == activations[1].ClientDeepLink || activations[0].Device.ID == activations[1].Device.ID {
 		t.Fatal("devices did not receive unique identities and subscriptions")
 	}
-	firstToken := strings.TrimPrefix(activations[0].INCYDeepLink, "incy://add/https://vpn.example.test/s/")
-	secondToken := strings.TrimPrefix(activations[1].INCYDeepLink, "incy://add/https://vpn.example.test/s/")
+	const prefix = "hiddify://import/https://vpn.example.test/s/"
+	firstToken := strings.TrimSuffix(strings.TrimPrefix(activations[0].ClientDeepLink, prefix), "#Family%20VPN")
+	secondToken := strings.TrimSuffix(strings.TrimPrefix(activations[1].ClientDeepLink, prefix), "#Family%20VPN")
 	if _, err := application.Revoke(context.Background(), activations[0].Device.ID); err != nil {
 		t.Fatal(err)
 	}

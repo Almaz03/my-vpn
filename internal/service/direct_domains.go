@@ -1,9 +1,8 @@
 package service
 
-// familyDirectDomains mirrors the explicit RU-direct allowlist from the
-// known-good INCY profile. Keep this list self-contained: geosite references
-// are deliberately excluded because a stale client asset previously caused
-// INCY to reject the complete profile with geosite.dat: EOF.
+// familyDirectDomains is the explicit RU-direct allowlist. Keep it
+// self-contained: a client with stale geosite assets must not reject the
+// complete profile.
 var familyDirectDomains = []string{
 	"domain:1cfresh.com",
 	"domain:1tv.ru",

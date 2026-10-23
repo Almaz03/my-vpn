@@ -12,8 +12,9 @@ import (
 var fullConfigUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 const (
-	familyProfileName = "🇫🇮 Финляндия 🚀"
-	familyProxyTag    = "family-proxy"
+	familyProfileName = "Family VPN · LT + FI"
+	familyProxyTag    = "family-auto"
+	familyBalancerTag = "family-balancer"
 )
 
 var privateNetworks = []string{
@@ -22,34 +23,27 @@ var privateNetworks = []string{
 	"17.0.0.0/8",
 }
 
-func buildFullXrayConfig(vlessURI string) (string, error) {
-	parsed, err := url.Parse(vlessURI)
-	if err != nil || parsed.Scheme != "vless" || parsed.User == nil || parsed.Hostname() == "" {
-		return "", errors.New("invalid VLESS client configuration")
+func buildFullXrayConfig(vlessURIs []string) (string, error) {
+	if len(vlessURIs) != 2 {
+		return "", errors.New("exactly two VLESS client configurations are required")
 	}
-	uuid := parsed.User.Username()
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil || port < 1 || port > 65535 || !fullConfigUUIDPattern.MatchString(uuid) {
-		return "", errors.New("invalid VLESS client configuration")
+	ltOutbound, err := buildRealityOutbound(vlessURIs[0], "lt-reality")
+	if err != nil {
+		return "", err
 	}
-	query := parsed.Query()
-	serverName := query.Get("sni")
-	publicKey := query.Get("pbk")
-	shortID := query.Get("sid")
-	fingerprint := query.Get("fp")
-	flow := query.Get("flow")
-	transport := query.Get("type")
-	if query.Get("security") != "reality" || query.Get("encryption") != "none" ||
-		serverName == "" || publicKey == "" || shortID == "" || fingerprint == "" ||
-		flow != "xtls-rprx-vision" || (transport != "tcp" && transport != "raw") ||
-		containsUnsafeConfigText(serverName, publicKey, shortID, fingerprint) {
-		return "", errors.New("invalid VLESS client configuration")
+	fiOutbound, err := buildRealityOutbound(vlessURIs[1], "fi-reality")
+	if err != nil {
+		return "", err
 	}
 
 	directDomains := append([]string(nil), familyDirectDomains...)
 	config := map[string]any{
 		"remarks": familyProfileName,
 		"log":     map[string]any{"loglevel": "warning"},
+		"observatory": map[string]any{
+			"subjectSelector": []string{"lt-reality", "fi-reality"},
+			"probeURL":        "https://www.gstatic.com/generate_204", "probeInterval": "30s",
+		},
 		"dns": map[string]any{
 			"queryStrategy": "UseIPv4",
 			"servers": []any{
@@ -77,23 +71,7 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 			},
 		},
 		"outbounds": []any{
-			map[string]any{
-				"tag": familyProxyTag, "protocol": "vless",
-				"settings": map[string]any{"vnext": []any{map[string]any{
-					"address": parsed.Hostname(), "port": port,
-					"users": []any{map[string]any{"id": uuid, "encryption": "none", "flow": flow}},
-				}}},
-				"streamSettings": map[string]any{
-					"network": "tcp", "security": "reality",
-					"tcpSettings": map[string]any{"header": map[string]any{"type": "none"}},
-					"realitySettings": map[string]any{
-						"show":        false,
-						"fingerprint": fingerprint, "serverName": serverName,
-						"publicKey": publicKey, "shortId": shortID, "spiderX": "/",
-					},
-				},
-				"mux": map[string]any{"enabled": false},
-			},
+			ltOutbound, fiOutbound,
 			map[string]any{
 				"tag": "direct", "protocol": "freedom", "settings": map[string]any{},
 				"streamSettings": map[string]any{"sockopt": map[string]any{"domainStrategy": "ForceIPv4"}},
@@ -103,15 +81,19 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 		},
 		"routing": map[string]any{
 			"domainStrategy": "IPIfNonMatch",
+			"balancers": []any{map[string]any{
+				"tag": familyBalancerTag, "selector": []string{"lt-reality", "fi-reality"},
+				"strategy": map[string]any{"type": "leastPing"},
+			}},
 			"rules": []any{
 				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "ip": []string{"77.88.8.8"}, "outboundTag": "direct"},
-				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "outboundTag": familyProxyTag},
+				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "balancerTag": familyBalancerTag},
 				map[string]any{"type": "field", "port": 53, "outboundTag": "dns-out"},
 				map[string]any{"type": "field", "ip": privateNetworks, "outboundTag": "direct"},
 				map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
 				map[string]any{"type": "field", "network": "udp", "port": 443, "outboundTag": "block"},
 				map[string]any{"type": "field", "domain": directDomains, "outboundTag": "direct"},
-				map[string]any{"type": "field", "network": "tcp,udp", "outboundTag": familyProxyTag},
+				map[string]any{"type": "field", "network": "tcp,udp", "balancerTag": familyBalancerTag},
 			},
 		},
 	}
@@ -120,6 +102,49 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 		return "", errors.New("encode full Xray configuration")
 	}
 	return string(body) + "\n", nil
+}
+
+func buildRealityOutbound(vlessURI, tag string) (map[string]any, error) {
+	parsed, err := url.Parse(vlessURI)
+	if err != nil || parsed.Scheme != "vless" || parsed.User == nil || parsed.Hostname() == "" {
+		return nil, errors.New("invalid VLESS client configuration")
+	}
+	uuid := parsed.User.Username()
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 || !fullConfigUUIDPattern.MatchString(uuid) {
+		return nil, errors.New("invalid VLESS client configuration")
+	}
+	query := parsed.Query()
+	serverName := query.Get("sni")
+	publicKey := query.Get("pbk")
+	shortID := query.Get("sid")
+	fingerprint := query.Get("fp")
+	flow := query.Get("flow")
+	transport := query.Get("type")
+	if query.Get("security") != "reality" || query.Get("encryption") != "none" ||
+		serverName == "" || publicKey == "" || shortID == "" || fingerprint == "" ||
+		flow != "xtls-rprx-vision" || (transport != "tcp" && transport != "raw") ||
+		containsUnsafeConfigText(serverName, publicKey, shortID, fingerprint) {
+		return nil, errors.New("invalid VLESS client configuration")
+	}
+
+	return map[string]any{
+		"tag": tag, "protocol": "vless",
+		"settings": map[string]any{"vnext": []any{map[string]any{
+			"address": parsed.Hostname(), "port": port,
+			"users": []any{map[string]any{"id": uuid, "encryption": "none", "flow": flow}},
+		}}},
+		"streamSettings": map[string]any{
+			"network": "tcp", "security": "reality",
+			"tcpSettings": map[string]any{"header": map[string]any{"type": "none"}},
+			"realitySettings": map[string]any{
+				"show":        false,
+				"fingerprint": fingerprint, "serverName": serverName,
+				"publicKey": publicKey, "shortId": shortID, "spiderX": "/",
+			},
+		},
+		"mux": map[string]any{"enabled": false},
+	}, nil
 }
 
 func containsUnsafeConfigText(values ...string) bool {

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadRejectsTelegramTokenWithoutAdmins(t *testing.T) {
@@ -26,7 +27,7 @@ func TestLoadAcceptsSafeMinimum(t *testing.T) {
 		t.Fatal(err)
 	}
 	if configuration.ListenAddr != "127.0.0.1:8080" || configuration.ProvisionerMode != "noop" ||
-		configuration.TelegramOffsetPath != "/var/lib/my-vpn/telegram-offset" {
+		configuration.TelegramOffsetPath != "/var/lib/my-vpn/telegram-offset" || configuration.InviteTTL != 5*time.Minute {
 		t.Fatalf("unexpected defaults: %#v", configuration)
 	}
 }

@@ -62,7 +62,7 @@ func Load() (Config, error) {
 		TelegramBotToken:   botToken,
 		TelegramAdmins:     admins,
 		TelegramOffsetPath: envOr("TELEGRAM_OFFSET_PATH", "/var/lib/my-vpn/telegram-offset"),
-		InviteTTL:          10 * time.Minute,
+		InviteTTL:          5 * time.Minute,
 	}, nil
 }
 

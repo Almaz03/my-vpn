@@ -7,7 +7,7 @@ import (
 )
 
 func TestFullXrayConfigUsesTCPRealityTransport(t *testing.T) {
-	body, err := buildFullXrayConfig("vless://00000000-0000-4000-8000-000000000001@vpn.example.test:8443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#Family")
+	body, err := buildFullXrayConfig(testDualURIs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestFullXrayConfigUsesTCPRealityTransport(t *testing.T) {
 		t.Fatalf("unexpected visible profile name %q", config.Remarks)
 	}
 	for _, outbound := range config.Outbounds {
-		if outbound.Tag != familyProxyTag {
+		if outbound.Tag != "fi-reality" {
 			continue
 		}
 		if outbound.StreamSettings.Network != "tcp" || outbound.StreamSettings.Security != "reality" ||
@@ -45,7 +45,7 @@ func TestFullXrayConfigUsesTCPRealityTransport(t *testing.T) {
 }
 
 func TestFullXrayConfigForcesQUICFallbackToTCP(t *testing.T) {
-	body, err := buildFullXrayConfig("vless://00000000-0000-4000-8000-000000000001@tcp.example.test:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=tcp.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#Family")
+	body, err := buildFullXrayConfig(testDualURIs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,14 +55,14 @@ func TestFullXrayConfigForcesQUICFallbackToTCP(t *testing.T) {
 }
 
 func TestFullXrayConfigDoesNotDependOnClientGeodata(t *testing.T) {
-	body, err := buildFullXrayConfig("vless://00000000-0000-4000-8000-000000000001@tcp.example.test:443?encryption=none&security=reality&type=raw&flow=xtls-rprx-vision&sni=tcp.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#Family")
+	body, err := buildFullXrayConfig(testDualURIs())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(body, "geosite:") || strings.Contains(body, "geoip:") {
-		t.Fatal("INCY config must not depend on possibly stale geosite.dat or geoip.dat assets")
+		t.Fatal("client config must not depend on possibly stale geosite.dat or geoip.dat assets")
 	}
-	if !strings.Contains(body, `"domain:ru"`) || !strings.Contains(body, `"outboundTag":"family-proxy"`) {
+	if !strings.Contains(body, `"domain:ru"`) || !strings.Contains(body, `"balancerTag":"family-balancer"`) {
 		t.Fatal("expected self-contained RU direct rule and proxy fallback")
 	}
 	if len(familyDirectDomains) < 230 {
@@ -75,18 +75,25 @@ func TestFullXrayConfigDoesNotDependOnClientGeodata(t *testing.T) {
 }
 
 func TestFullXrayConfigRoutesDNSBypassAndProxyExplicitly(t *testing.T) {
-	body, err := buildFullXrayConfig("vless://00000000-0000-4000-8000-000000000001@tcp.example.test:443?encryption=none&security=reality&type=raw&flow=xtls-rprx-vision&sni=tcp.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#Family")
+	body, err := buildFullXrayConfig(testDualURIs())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
 		`"tag":"dns_out"`,
 		`"inboundTag":["dns_out"],"ip":["77.88.8.8"],"outboundTag":"direct"`,
-		`"inboundTag":["dns_out"],"outboundTag":"family-proxy"`,
+		`"balancerTag":"family-balancer","inboundTag":["dns_out"]`,
 		`"outboundTag":"dns-out","port":53`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("missing explicit DNS route %q", expected)
 		}
+	}
+}
+
+func testDualURIs() []string {
+	return []string{
+		"vless://00000000-0000-4000-8000-000000000001@lt.example.test:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=lt.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#LT",
+		"vless://00000000-0000-4000-8000-000000000001@fi.example.test:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=fi.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#FI",
 	}
 }

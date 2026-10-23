@@ -88,6 +88,7 @@ case "$action" in
     existing="$(jq -r --arg email "$email" '.inbounds[] | select(.tag=="my-vpn-reality") | .settings.clients[]? | select(.email==$email) | .id' "$config")"
     if [[ -n "$existing" ]]; then
       [[ "$existing" == "$uuid" ]] || exit 1
+      jq -cn --arg uuid "$uuid" '{state:"exists",uuid:$uuid}'
       exit 0
     fi
     candidate="$(mktemp --suffix=.json /etc/xray/.edge-config.XXXXXX)"
@@ -98,6 +99,7 @@ case "$action" in
     xray run -test -config "$candidate" >/dev/null
     runtime_add "$uuid" "$email"
     mv -f "$candidate" "$config"
+    jq -cn --arg uuid "$uuid" '{state:"active",uuid:$uuid}'
     ;;
   remove)
     [[ $# -eq 2 ]] || exit 2

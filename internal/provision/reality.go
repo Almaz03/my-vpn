@@ -33,7 +33,7 @@ var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]
 // The helper protocol is deliberately narrow and JSON-only. A provision call
 // must be idempotent for device_id and a revoke call must succeed when the
 // credential is already absent. Private credentials may be returned only in
-// the one-time INCY deep link and must never be written to stderr or logs.
+// the one-time client configuration and must never be written to stderr or logs.
 type Reality struct {
 	runner  helperRunner
 	timeout time.Duration
@@ -42,8 +42,7 @@ type Reality struct {
 // ClientConfig is sensitive, short-lived response data. Callers must not log,
 // persist, cache, or send it through Telegram.
 type ClientConfig struct {
-	VLESSURI     string
-	INCYDeepLink string
+	VLESSURIs []string
 }
 
 // ConfigProvider is optional functionality implemented by production
@@ -72,10 +71,9 @@ type helperRequest struct {
 }
 
 type provisionResponse struct {
-	Version      int    `json:"version"`
-	State        string `json:"state"`
-	INCYDeepLink string `json:"incy_deep_link"`
-	ConfigPath   string `json:"config_path,omitempty"`
+	Version    int    `json:"version"`
+	State      string `json:"state"`
+	ConfigPath string `json:"config_path,omitempty"`
 }
 
 type revokeResponse struct {
@@ -84,9 +82,8 @@ type revokeResponse struct {
 }
 
 type configResponse struct {
-	Version      int    `json:"version"`
-	VLESSURI     string `json:"vless_uri"`
-	INCYDeepLink string `json:"incy_deep_link"`
+	Version   int      `json:"version"`
+	VLESSURIs []string `json:"vless_uris"`
 }
 
 func NewReality() *Reality {
@@ -117,7 +114,6 @@ func (r *Reality) Provision(ctx context.Context, request DeviceRequest) (Result,
 	var response provisionResponse
 	if err := decodeHelperResponse(output, &response); err != nil ||
 		response.Version != helperProtocol || response.State != "active" ||
-		!safeINCYDeepLink(response.INCYDeepLink) ||
 		!safeDeviceConfigPath(response.ConfigPath, request.DeviceID) {
 		r.bestEffortRevoke(ctx, credentialRef)
 		return result, errors.New("Reality helper returned an invalid provision response")
@@ -125,7 +121,6 @@ func (r *Reality) Provision(ctx context.Context, request DeviceRequest) (Result,
 	return Result{
 		CredentialRef: credentialRef,
 		State:         "active",
-		INCYDeepLink:  response.INCYDeepLink,
 		ConfigPath:    response.ConfigPath,
 	}, nil
 }
@@ -168,10 +163,10 @@ func (r *Reality) ClientConfig(ctx context.Context, credentialRef string) (Clien
 	}
 	var response configResponse
 	if err := decodeHelperResponse(output, &response); err != nil || response.Version != helperProtocol ||
-		!safeVLESSURI(response.VLESSURI) || !safeINCYDeepLink(response.INCYDeepLink) {
+		len(response.VLESSURIs) != 2 || !safeVLESSURI(response.VLESSURIs[0]) || !safeVLESSURI(response.VLESSURIs[1]) {
 		return ClientConfig{}, errors.New("Reality helper returned an invalid config response")
 	}
-	return ClientConfig{VLESSURI: response.VLESSURI, INCYDeepLink: response.INCYDeepLink}, nil
+	return ClientConfig{VLESSURIs: append([]string(nil), response.VLESSURIs...)}, nil
 }
 
 func (r *Reality) bestEffortRevoke(parent context.Context, credentialRef string) {
@@ -276,14 +271,6 @@ func realityCredentialRef(deviceID string) string { return "vless-reality:" + de
 
 func validRealityCredentialRef(value string) bool {
 	return strings.HasPrefix(value, "vless-reality:") && deviceIDPattern.MatchString(strings.TrimPrefix(value, "vless-reality:"))
-}
-
-func safeINCYDeepLink(value string) bool {
-	if len(value) == 0 || len(value) > 16<<10 || strings.ContainsAny(value, "\r\n\x00") {
-		return false
-	}
-	parsed, err := url.Parse(value)
-	return err == nil && parsed.Scheme == "incy" && strings.HasPrefix(value, "incy://") && parsed.User == nil
 }
 
 func safeVLESSURI(value string) bool {

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-trap 'status=$?; echo "edge bootstrap failed at line $LINENO" >&2; exit "$status"' ERR
+
+reset_marker=/etc/my-vpn/.fresh-hiddify-dual-edge-v1
+bootstrap_error() {
+  local exit_code=$?
+  printf 'edge bootstrap failed at line %s status=%s\n' "${BASH_LINENO[0]}" "$exit_code" >&2
+  exit "$exit_code"
+}
+trap bootstrap_error ERR
 
 [[ "$EUID" -eq 0 ]] || exit 1
 [[ $# -eq 3 ]] || { echo "usage: bootstrap-edge-server.sh SSH_PORT EDGE_IP EDGE_SNI" >&2; exit 2; }
@@ -74,6 +81,19 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn-edge ]]; then
 else
   grep -Fxq "XRAY_SERVER=$edge_ip" /etc/my-vpn/edge.env
   grep -Fxq "XRAY_SNI=$edge_sni" /etc/my-vpn/edge.env
+fi
+
+if [[ ! -f "$reset_marker" ]]; then
+  install -d -m 0700 -o root -g root /var/backups/my-vpn-edge/pre-hiddify-dual-edge-v1
+  cp -a /etc/xray/config.json /var/backups/my-vpn-edge/pre-hiddify-dual-edge-v1/xray-config.json
+  reset_candidate="$(mktemp --suffix=.json /etc/xray/.reset-config.XXXXXX)"
+  jq '(.inbounds[] | select(.tag == "my-vpn-reality") | .settings.clients) = []' \
+    /etc/xray/config.json > "$reset_candidate"
+  chown xray:xray "$reset_candidate"
+  chmod 0640 "$reset_candidate"
+  xray run -test -config "$reset_candidate" >/dev/null
+  mv -f "$reset_candidate" /etc/xray/config.json
+  install -m 0600 -o root -g root /dev/null "$reset_marker"
 fi
 # Keep public egress on IPv4. This avoids clients receiving an IPv6 route that
 # the edge or the mobile network cannot carry consistently.

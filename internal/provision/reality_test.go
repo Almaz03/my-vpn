@@ -46,7 +46,7 @@ func validDeviceRequest() DeviceRequest {
 
 func TestRealityProvision(t *testing.T) {
 	helper := &fakeHelper{
-		provision: []byte(`{"version":1,"state":"active","incy_deep_link":"incy://import?url=vless%3A%2F%2Fcredential"}`),
+		provision: []byte(`{"version":1,"state":"active","config_path":"/api/v1/devices/0123456789abcdef0123456789abcdef/config"}`),
 		revoke:    []byte(`{"version":1,"state":"revoked"}`),
 	}
 	provider := &Reality{runner: helper, timeout: time.Second}
@@ -57,7 +57,7 @@ func TestRealityProvision(t *testing.T) {
 	if result.CredentialRef != "vless-reality:0123456789abcdef0123456789abcdef" || result.State != "active" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if !strings.HasPrefix(result.INCYDeepLink, "incy://") || len(helper.calls) != 1 || helper.calls[0].action != "provision" {
+	if result.ConfigPath == "" || len(helper.calls) != 1 || helper.calls[0].action != "provision" {
 		t.Fatalf("unexpected helper calls/result: %#v %#v", helper.calls, result)
 	}
 	var request helperRequest
@@ -84,7 +84,7 @@ func TestRealityRejectsRequestBeforeHelper(t *testing.T) {
 
 func TestRealityInvalidResponseTriggersIdempotentCleanup(t *testing.T) {
 	helper := &fakeHelper{
-		provision: []byte(`{"version":1,"state":"active","incy_deep_link":"https://example.test/leak"}`),
+		provision: []byte(`{"version":1,"state":"active","config_path":"/unsafe"}`),
 		revoke:    []byte(`{"version":1,"state":"absent"}`),
 	}
 	provider := &Reality{runner: helper, timeout: time.Second}
@@ -131,13 +131,13 @@ func TestRealityRevokeIsStrictAndAcceptsAbsent(t *testing.T) {
 }
 
 func TestRealityClientConfig(t *testing.T) {
-	helper := &fakeHelper{config: []byte(`{"version":1,"vless_uri":"vless://01234567-89ab-4def-8123-456789abcdef@example.test:8443?security=reality&sni=www.example.com&pbk=public-key","incy_deep_link":"incy://import?url=vless%3A%2F%2Fcredential"}`)}
+	helper := &fakeHelper{config: []byte(`{"version":1,"vless_uris":["vless://01234567-89ab-4def-8123-456789abcdef@lt.example.test:443?security=reality&sni=lt.example.com&pbk=public-key","vless://01234567-89ab-4def-8123-456789abcdef@fi.example.test:443?security=reality&sni=fi.example.com&pbk=public-key"]}`)}
 	provider := &Reality{runner: helper, timeout: time.Second}
 	config, err := provider.ClientConfig(context.Background(), "vless-reality:0123456789abcdef0123456789abcdef")
 	if err != nil {
 		t.Fatalf("ClientConfig: %v", err)
 	}
-	if !strings.HasPrefix(config.VLESSURI, "vless://") || !strings.HasPrefix(config.INCYDeepLink, "incy://") {
+	if len(config.VLESSURIs) != 2 || !strings.HasPrefix(config.VLESSURIs[0], "vless://") {
 		t.Fatalf("unexpected config: %#v", config)
 	}
 	if len(helper.calls) != 1 || helper.calls[0].action != "config" {
@@ -146,7 +146,7 @@ func TestRealityClientConfig(t *testing.T) {
 }
 
 func TestRealityClientConfigRejectsCredentialLeakInMalformedResponse(t *testing.T) {
-	helper := &fakeHelper{config: []byte(`{"version":1,"vless_uri":"https://example.test/not-vless","incy_deep_link":"incy://import?x=1"}`)}
+	helper := &fakeHelper{config: []byte(`{"version":1,"vless_uris":["https://example.test/not-vless","vless://01234567-89ab-4def-8123-456789abcdef@fi.example.test:443?security=reality&sni=fi.example.com&pbk=key"]}`)}
 	provider := &Reality{runner: helper, timeout: time.Second}
 	if _, err := provider.ClientConfig(context.Background(), "vless-reality:0123456789abcdef0123456789abcdef"); err == nil {
 		t.Fatal("ClientConfig accepted an invalid VLESS URI")
@@ -155,7 +155,7 @@ func TestRealityClientConfigRejectsCredentialLeakInMalformedResponse(t *testing.
 
 func TestRealityRejectsUnknownResponseFields(t *testing.T) {
 	helper := &fakeHelper{
-		provision: []byte(`{"version":1,"state":"active","incy_deep_link":"incy://import?x=1","credential":"must-not-be-trusted"}`),
+		provision: []byte(`{"version":1,"state":"active","config_path":"/api/v1/devices/0123456789abcdef0123456789abcdef/config","credential":"must-not-be-trusted"}`),
 		revoke:    []byte(`{"version":1,"state":"revoked"}`),
 	}
 	provider := &Reality{runner: helper, timeout: time.Second}
@@ -169,7 +169,7 @@ func TestRealityRejectsUnknownResponseFields(t *testing.T) {
 
 func TestRealityRejectsTrailingResponseData(t *testing.T) {
 	helper := &fakeHelper{
-		provision: []byte(`{"version":1,"state":"active","incy_deep_link":"incy://import?x=1"} credential`),
+		provision: []byte(`{"version":1,"state":"active","config_path":"/api/v1/devices/0123456789abcdef0123456789abcdef/config"} credential`),
 		revoke:    []byte(`{"version":1,"state":"revoked"}`),
 	}
 	provider := &Reality{runner: helper, timeout: time.Second}

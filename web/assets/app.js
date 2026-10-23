@@ -10,11 +10,11 @@
   };
 
   const PLATFORM_HINTS = {
-    android: 'Установите INCY из официального источника. Android попросит разрешить VPN-подключение.',
-    ios: 'Установите INCY, затем подтвердите добавление VPN-конфигурации в iOS или iPadOS.',
-    windows: 'Установите INCY для Windows и подтвердите импорт профиля в приложении.',
-    macos: 'Установите INCY для macOS и разрешите добавление VPN-конфигурации в настройках системы.',
-    linux: 'Откройте официальный сайт INCY и выберите поддерживаемый пакет для вашего дистрибутива.'
+    android: 'Установите Hiddify из официального источника. Android попросит разрешить VPN-подключение.',
+    ios: 'Установите Hiddify из App Store, затем подтвердите добавление VPN-конфигурации.',
+    windows: 'Установите Hiddify для Windows и подтвердите импорт профиля в приложении.',
+    macos: 'Установите Hiddify для macOS и разрешите добавление VPN-конфигурации в настройках системы.',
+    linux: 'Откройте официальный сайт Hiddify и выберите пакет для вашего дистрибутива.'
   };
 
   const form = document.querySelector('#activation-form');
@@ -400,7 +400,7 @@
   function renderResult(data) {
     clearAccessRequestToken();
     clearStatus();
-    deepLink = safeDeepLink(data.incy_deep_link);
+    deepLink = safeDeepLink(data.client_deep_link);
     const downloadUrl = safeLocalUrl(data.config_download_url);
     const qrUrl = safeImageUrl(data.qr_code_url);
     const profileAvailable = Boolean(deepLink || downloadUrl || qrUrl);
@@ -409,7 +409,7 @@
     resultMessage.textContent = typeof data.message === 'string' && data.message.length <= 180
       ? data.message
       : profileAvailable
-        ? 'Установите INCY и импортируйте созданный профиль.'
+        ? 'Установите Hiddify и импортируйте созданный профиль.'
         : 'Профиль ещё не выдан. Администратор завершит подготовку подключения.';
     installHint.textContent = PLATFORM_HINTS[platform];
     importHint.textContent = profileAvailable
@@ -433,7 +433,7 @@
 
   function safeDeepLink(value) {
     if (typeof value !== 'string' || value.length > 4096) return '';
-    return /^incy:\/\/[A-Za-z0-9._~!$&'()*+,;=:@/?%-]+$/.test(value) ? value : '';
+    return /^hiddify:\/\/import\/[A-Za-z0-9._~!$&'()*+,;=:@/?#%-]+$/.test(value) ? value : '';
   }
 
   function safeLocalUrl(value) {

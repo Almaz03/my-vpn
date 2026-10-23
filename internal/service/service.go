@@ -32,7 +32,7 @@ type Service struct {
 
 type Activation struct {
 	Device            store.Device
-	INCYDeepLink      string
+	ClientDeepLink    string
 	ConfigDownloadURL string
 	QRCodeURL         string
 	Message           string
@@ -284,7 +284,7 @@ func (s *Service) Activate(ctx context.Context, code, platform, requestedDeviceN
 	activation.Device.State = result.State
 	if result.State == "active" {
 		subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + subscriptionToken}).String()
-		activation.INCYDeepLink = "incy://add/" + subscriptionURL
+		activation.ClientDeepLink = hiddifyDeepLink(subscriptionURL)
 		activation.ConfigDownloadURL = subscriptionURL + "?download=1"
 		activation.QRCodeURL = subscriptionURL + "/qr"
 	}
@@ -323,7 +323,7 @@ func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionP
 	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
-	body, err := buildFullXrayConfig(client.VLESSURI)
+	body, err := buildFullXrayConfig(client.VLESSURIs)
 	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
@@ -336,7 +336,11 @@ func (s *Service) RoutingProfileURL() string {
 
 func (s *Service) SubscriptionDeepLink(token string) string {
 	subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + token}).String()
-	return "incy://add/" + subscriptionURL
+	return hiddifyDeepLink(subscriptionURL)
+}
+
+func hiddifyDeepLink(subscriptionURL string) string {
+	return "hiddify://import/" + subscriptionURL + "#Family%20VPN"
 }
 
 func (s *Service) RoutingProfile() RoutingProfile {
@@ -431,16 +435,10 @@ func validateProvisionResult(result provision.Result) error {
 	if result.State != "pending" && result.State != "active" {
 		return errors.New("provisioner returned an invalid state")
 	}
-	if result.INCYDeepLink != "" {
-		parsed, err := url.Parse(result.INCYDeepLink)
-		if err != nil || parsed.Scheme != "incy" || !strings.HasPrefix(result.INCYDeepLink, "incy://") {
-			return errors.New("provisioner returned an invalid INCY deep link")
-		}
-	}
 	if result.ConfigPath != "" && !safeRelativePath(result.ConfigPath) {
 		return errors.New("provisioner returned an unsafe config path")
 	}
-	if result.State == "active" && result.INCYDeepLink == "" && result.ConfigPath == "" {
+	if result.State == "active" && result.ConfigPath == "" {
 		return errors.New("active provisioner result has no import mechanism")
 	}
 	return nil

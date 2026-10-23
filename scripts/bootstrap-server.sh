@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-trap 'status=$?; echo "bootstrap failed at line $LINENO" >&2; exit "$status"' ERR
+bootstrap_error() {
+  local exit_code=$?
+  printf 'bootstrap failed at line %s status=%s\n' "${BASH_LINENO[0]}" "$exit_code" >&2
+  exit "$exit_code"
+}
+trap bootstrap_error ERR
 
 if [[ "$EUID" -ne 0 ]]; then
   echo "bootstrap-server.sh must run as root" >&2
@@ -21,10 +26,10 @@ xray_url="https://github.com/XTLS/Xray-core/releases/download/v${xray_version}/X
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bundle_root="$(cd "$script_dir/.." && pwd)"
 
-[[ "$ssh_port" =~ ^[0-9]{1,5}$ ]] && (( ssh_port >= 1 && ssh_port <= 65535 )) || {
+if [[ ! "$ssh_port" =~ ^[0-9]{1,5}$ ]] || (( ssh_port < 1 || ssh_port > 65535 )); then
   echo "invalid SSH port" >&2
   exit 2
-}
+fi
 for required in \
   "$bundle_root/deploy/Caddyfile" \
   "$bundle_root/deploy/my-vpn.service" \
@@ -39,6 +44,7 @@ for required in \
   "$bundle_root/scripts/restore-backup.sh" \
   "$bundle_root/scripts/release-helper.sh" \
   "$bundle_root/scripts/reality-helper.sh" \
+  "$bundle_root/scripts/edge-user-helper.sh" \
   "$bundle_root/scripts/application-canary.sh" \
   "$bundle_root/scripts/reality-canary.sh"; do
   test -f "$required"
@@ -76,7 +82,7 @@ echo "bootstrap phase: packages installed"
 
 # One-time destructive migration requested by the owner: retain a root-only
 # recovery copy, then remove the complete AmneziaWG data plane and old portal
-# state so every INCY device is provisioned from scratch.
+# state so every legacy device is provisioned from scratch.
 migration_marker=/etc/my-vpn/.fresh-incy-vless-v1
 migration_backup=/var/backups/my-vpn/pre-incy-vless-v1
 if [[ ! -f "$migration_marker" ]]; then
@@ -97,6 +103,32 @@ if [[ ! -f "$migration_marker" ]]; then
   rm -f -- /etc/my-vpn/amneziawg.env /usr/local/libexec/my-vpn/amneziawg-helper
   ufw --force delete allow 35473/udp >/dev/null 2>&1 || true
   echo "bootstrap phase: AmneziaWG removed and recovery backup retained"
+fi
+
+# Owner-authorized clean rebuild: old INCY/single-edge devices are incompatible
+# with the atomic LT+FI profile. Preserve a root-only snapshot once, then start
+# the portal and edge credential state empty.
+dual_edge_marker=/etc/my-vpn/.fresh-hiddify-dual-edge-v1
+dual_edge_backup=/var/backups/my-vpn/pre-hiddify-dual-edge-v1
+if [[ ! -f "$dual_edge_marker" ]]; then
+  install -d -m 0750 -o root -g root /etc/my-vpn
+  install -d -m 0700 -o root -g root "$dual_edge_backup"
+  systemctl stop my-vpn.service >/dev/null 2>&1 || true
+  if [[ -d /var/lib/my-vpn && ! -f "$dual_edge_backup/my-vpn-state.tar.gz" ]]; then
+    tar -C /var/lib -czf "$dual_edge_backup/my-vpn-state.tar.gz" my-vpn
+    chmod 0600 "$dual_edge_backup/my-vpn-state.tar.gz"
+  fi
+  rm -f -- /var/lib/my-vpn/my-vpn.db /var/lib/my-vpn/my-vpn.db-shm /var/lib/my-vpn/my-vpn.db-wal
+  rm -rf -- /var/lib/my-vpn/reality
+  if [[ -f /etc/xray/config.json ]]; then
+    cp -a /etc/xray/config.json "$dual_edge_backup/xray-config.json"
+    jq '(.inbounds[]? | select(.tag == "my-vpn-reality") | .settings.clients) = []' \
+      /etc/xray/config.json > "$dual_edge_backup/xray-config.empty.json"
+    install -m 0640 -o xray -g xray "$dual_edge_backup/xray-config.empty.json" /etc/xray/config.json
+  fi
+  touch "$dual_edge_marker"
+  chmod 0600 "$dual_edge_marker"
+  echo "bootstrap phase: legacy portal and edge credentials reset; recovery backup retained"
 fi
 
 for user_spec in "$app_user:/var/lib/my-vpn:/usr/sbin/nologin" "$xray_user:/var/lib/xray:/usr/sbin/nologin"; do
@@ -146,6 +178,7 @@ install -m 0755 -o root -g root "$bundle_root/scripts/backup.sh" /usr/local/libe
 install -m 0755 -o root -g root "$bundle_root/scripts/restore-backup.sh" /usr/local/libexec/my-vpn/restore-backup.sh
 install -m 0755 -o root -g root "$bundle_root/scripts/release-helper.sh" /usr/local/sbin/my-vpn-release
 install -m 0755 -o root -g root "$bundle_root/scripts/reality-helper.sh" /usr/local/libexec/my-vpn/reality-helper
+install -m 0755 -o root -g root "$bundle_root/scripts/edge-user-helper.sh" /usr/local/libexec/my-vpn/edge-user-helper
 install -m 0755 -o root -g root "$bundle_root/scripts/application-canary.sh" /usr/local/libexec/my-vpn/application-canary.sh
 install -m 0755 -o root -g root "$bundle_root/scripts/reality-canary.sh" /usr/local/libexec/my-vpn/reality-canary.sh
 install -m 0644 -o root -g root "$bundle_root/deploy/my-vpn.service" /etc/systemd/system/my-vpn.service
@@ -253,11 +286,14 @@ else
 fi
 
 # The Reality transport connects to the server IP directly, while the owned
-# domain remains the SNI. This mirrors the known-good INCY configuration and
+# domain remains the SNI. This mirrors the known-good client configuration and
 # avoids depending on a mobile carrier's DNS before the tunnel is established.
 reality_server_ipv4="$(getent ahostsv4 tcp.vpn.akalmaz.tech | awk '$2 == "STREAM" {print $1; exit}')"
 [[ "$reality_server_ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
 sed -i -E "s/^XRAY_SERVER=.*/XRAY_SERVER=${reality_server_ipv4}/" /etc/my-vpn/xray-client.env
+cp /etc/my-vpn/xray-client.env /etc/my-vpn/edge.env
+chown root:root /etc/my-vpn/edge.env
+chmod 0600 /etc/my-vpn/edge.env
 
 # Add the loopback-only HandlerService API to installations created before the
 # no-restart provisioning path. Public traffic never reaches this listener.

@@ -1,249 +1,152 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$EUID" -ne 0 ]]; then
-  exit 1
-fi
-if [[ $# -ne 1 || ! "$1" =~ ^(provision|revoke|config)$ ]]; then
-  exit 2
-fi
+# Root-owned dual-edge coordinator.
+edges_file=/etc/my-vpn/edges.json
+state_dir=/var/lib/my-vpn/reality/devices
+local_helper=/usr/local/libexec/my-vpn/edge-user-helper
+ssh_key=/etc/my-vpn/edge-deploy-key
+known_hosts=/etc/my-vpn/edge-known-hosts
 
-action="$1"
-trap 'status=$?; echo "reality helper failed action=$action line=$LINENO status=$status" >&2; exit "$status"' ERR
-xray_config=/etc/xray/config.json
-client_env=/etc/my-vpn/xray-client.env
-lock=/run/lock/my-vpn-xray.lock
-api_server=127.0.0.1:10085
-request="$(head -c 65537)"
-(( ${#request} <= 65536 )) || exit 2
-jq -e 'type == "object" and .version == 1' <<<"$request" >/dev/null || exit 2
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+valid_device_id() { [[ "$1" =~ ^[0-9a-f]{32}$ ]]; }
+valid_uuid() { [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; }
 
-edge_controller_env=/etc/my-vpn/edge-controller.env
-edge_private_key=/etc/my-vpn/edge-deploy-key
-edge_known_hosts=/etc/my-vpn/edge-known-hosts
-
-controller_env() {
-  local name="$1" value
-  value="$(sed -n "s/^${name}=//p" "$edge_controller_env")"
-  [[ -n "$value" && "$value" != *$'\n'* ]] || exit 1
-  printf '%s' "$value"
-}
-remote_edge() {
-  local remote_action="$1" device_id="$2" host port user
-  host="$(controller_env EDGE_HOST)"
-  port="$(controller_env EDGE_PORT)"
-  user="$(controller_env EDGE_USER)"
-  [[ "$host" =~ ^([A-Za-z0-9.-]+|[0-9]{1,3}(\.[0-9]{1,3}){3})$ ]]
-  [[ "$port" =~ ^[0-9]{1,5}$ ]]
-  [[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
-  [[ "$remote_action" =~ ^(provision|config|remove)$ && "$device_id" =~ ^[0-9a-f]{32}$ ]]
-  ssh -F none -i "$edge_private_key" -o BatchMode=yes -o IdentitiesOnly=yes \
-    -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$edge_known_hosts" \
-    -o ConnectTimeout=8 -p "$port" "$user@$host" \
-    sudo -- /usr/local/libexec/my-vpn/edge-user-helper "$remote_action" "$device_id"
-}
-remote_links() {
-  local response="$1" device_id="$2" uuid server port public_key short_id sni flow fragment uri encoded deep_link
-  jq -e --arg device_id "$device_id" '
-    .version == 1 and .device_id == $device_id and
-    (.uuid | test("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
-    (.server | test("^[A-Za-z0-9.-]+$")) and (.port >= 1 and .port <= 65535) and
-    (.public_key | test("^[A-Za-z0-9_-]{43}$")) and
-    (.short_id | test("^[0-9a-f]{16}$")) and
-    (.sni | test("^[A-Za-z0-9.-]+$")) and .flow == "xtls-rprx-vision"
-  ' <<<"$response" >/dev/null
-  uuid="$(jq -r .uuid <<<"$response")"
-  server="$(jq -r .server <<<"$response")"
-  port="$(jq -r .port <<<"$response")"
-  public_key="$(jq -r .public_key <<<"$response")"
-  short_id="$(jq -r .short_id <<<"$response")"
-  sni="$(jq -r .sni <<<"$response")"
-  flow="$(jq -r .flow <<<"$response")"
-  fragment="🇫🇮 Финляндия 🚀"
-  uri="vless://${uuid}@${server}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=raw#${fragment}"
-  encoded="$(printf '%s' "$uri" | base64 -w 0)"
-  deep_link="incy://import/${encoded}"
-  printf '%s\n%s\n' "$uri" "$deep_link"
-}
-
-if [[ -f "$edge_controller_env" || -f "$edge_private_key" || -f "$edge_known_hosts" ]]; then
-  test -f "$edge_controller_env" -a -f "$edge_private_key" -a -f "$edge_known_hosts"
-  case "$action" in
-    provision)
-      device_id="$(jq -r '.device_id // empty' <<<"$request")"
-      [[ "$device_id" =~ ^[0-9a-f]{32}$ ]] || exit 2
-      jq -e '
-        (.relative_name | type == "string" and length > 0 and length <= 100) and
-        (.device_name | type == "string" and length > 0 and length <= 100) and
-        (.platform | IN("android", "ios", "ipad", "windows", "macos", "linux"))
-      ' <<<"$request" >/dev/null || exit 2
-      response="$(remote_edge provision "$device_id")"
-      mapfile -t links < <(remote_links "$response" "$device_id")
-      jq -cn --arg link "${links[1]}" --arg path "/api/v1/devices/$device_id/config" \
-        '{version:1,state:"active",incy_deep_link:$link,config_path:$path}'
-      ;;
-    config)
-      credential="$(jq -r '.credential_ref // empty' <<<"$request")"
-      [[ "$credential" =~ ^vless-reality:([0-9a-f]{32})$ ]] || exit 2
-      device_id="${BASH_REMATCH[1]}"
-      # Provision-on-read migrates pre-edge active devices without changing
-      # their portal subscription URL or database credential reference.
-      response="$(remote_edge provision "$device_id")"
-      mapfile -t links < <(remote_links "$response" "$device_id")
-      jq -cn --arg uri "${links[0]}" --arg link "${links[1]}" \
-        '{version:1,vless_uri:$uri,incy_deep_link:$link}'
-      ;;
-    revoke)
-      credential="$(jq -r '.credential_ref // empty' <<<"$request")"
-      [[ "$credential" =~ ^vless-reality:([0-9a-f]{32})$ ]] || exit 2
-      remote_edge remove "${BASH_REMATCH[1]}" >/dev/null
-      jq -cn '{version:1,state:"revoked"}'
-      ;;
-  esac
-  exit 0
-fi
-
-get_env() {
-  local name="$1" value
-  value="$(sed -n "s/^${name}=//p" "$client_env")"
-  [[ -n "$value" && "$value" != *$'\n'* ]] || exit 1
-  printf '%s' "$value"
-}
-validate_device_id() { [[ "$1" =~ ^[0-9a-f]{32}$ ]]; }
-device_from_credential() {
-  local credential="$1"
-  [[ "$credential" =~ ^vless-reality:([0-9a-f]{32})$ ]] || exit 2
-  printf '%s' "${BASH_REMATCH[1]}"
-}
-find_uuid() {
-  jq -r --arg email "device-$1" '
-    .inbounds[] | select(.tag == "my-vpn-reality") |
-    .settings.clients[]? | select(.email == $email) | .id
-  ' "$xray_config"
-}
-build_links() {
-  local device_id="$1" uuid="$2"
-  local server port public_key short_id sni flow fragment uri encoded deep_link
-  server="$(get_env XRAY_SERVER)"
-  port="$(get_env XRAY_PORT)"
-  public_key="$(get_env XRAY_PUBLIC_KEY)"
-  short_id="$(get_env XRAY_SHORT_ID)"
-  sni="$(get_env XRAY_SNI)"
-  flow="$(get_env XRAY_FLOW)"
-  [[ "$server" =~ ^[A-Za-z0-9.-]+$ && "$port" =~ ^[0-9]{1,5}$ ]]
-  [[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ && "$short_id" =~ ^[0-9a-f]{16}$ ]]
-  [[ "$sni" =~ ^[A-Za-z0-9.-]+$ && "$flow" == xtls-rprx-vision ]]
-  fragment="🇫🇮 Финляндия 🚀"
-  uri="vless://${uuid}@${server}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=raw#${fragment}"
-  encoded="$(printf '%s' "$uri" | base64 -w 0)"
-  deep_link="incy://import/${encoded}"
-  printf '%s\n%s\n' "$uri" "$deep_link"
-}
-validate_candidate() {
-  local candidate="$1"
-  jq -e '([.inbounds[] | select(.tag == "my-vpn-reality")] | length) == 1' "$candidate" >/dev/null
-  chown xray:xray "$candidate"
-  chmod 0640 "$candidate"
-  local validation_output
-  if ! validation_output="$(xray run -test -config "$candidate" 2>&1)"; then
-    echo "Xray rejected a generated candidate configuration:" >&2
-    sed -E \
-      -e 's/[0-9a-f]{8}-[0-9a-f-]{27,36}/[REDACTED_UUID]/g' \
-      -e 's/[A-Za-z0-9_-]{32,}/[REDACTED_VALUE]/g' \
-      <<<"$validation_output" >&2
-    exit 1
+validate_config() {
+  [[ -r "$edges_file" ]] || fail "edge configuration unavailable"
+  jq -e '
+    type == "array" and length == 2 and
+    ([.[].id] | sort == ["fi", "lt"]) and
+    all(.[];
+      (.id | test("^(lt|fi)$")) and
+      (.mode == "local" or .mode == "ssh") and
+      (if .mode == "ssh" then
+        (.host | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$")) and
+        (.port | type == "number" and . >= 1 and . <= 65535) and
+        (.user | test("^[a-z_][a-z0-9_-]{0,31}$"))
+      else true end))
+  ' "$edges_file" >/dev/null || fail "invalid edge configuration"
+  [[ -x "$local_helper" ]] || fail "local edge helper unavailable"
+  if jq -e 'any(.[]; .mode == "ssh")' "$edges_file" >/dev/null; then
+    [[ -r "$ssh_key" && -r "$known_hosts" ]] || fail "remote edge SSH material unavailable"
   fi
 }
-runtime_add() {
-  local uuid="$1" email="$2" runtime_config output
-  runtime_config="$(mktemp --suffix=.json /etc/xray/.runtime-user.XXXXXX)"
-  chmod 0600 "$runtime_config"
-  jq -n --arg id "$uuid" --arg email "$email" '{
-    inbounds: [{
-      tag: "my-vpn-reality", listen: "127.0.0.1", port: 1, protocol: "vless",
-      settings: {decryption: "none", clients: [{id: $id, flow: "xtls-rprx-vision", email: $email}]}
-    }]
-  }' > "$runtime_config"
-  output="$(xray api adu --server="$api_server" --timeout=5 "$runtime_config")"
-  rm -f "$runtime_config"
-  grep -Fxq 'Added 1 user(s) in total.' <<<"$output"
-}
-runtime_remove() {
-  local email="$1" output
-  output="$(xray api rmu --server="$api_server" --timeout=5 -tag my-vpn-reality "$email")"
-  grep -Fxq 'Removed 1 user(s) in total.' <<<"$output"
+
+edge_call() {
+  local edge="$1" action="$2" device_id="${3:-}" uuid="${4:-}"
+  local mode host port user
+  mode="$(jq -r '.mode' <<<"$edge")"
+  if [[ "$mode" == local ]]; then
+    "$local_helper" "$action" ${device_id:+"$device_id"} ${uuid:+"$uuid"}
+    return
+  fi
+  host="$(jq -r '.host' <<<"$edge")"
+  port="$(jq -r '.port' <<<"$edge")"
+  user="$(jq -r '.user' <<<"$edge")"
+  ssh -i "$ssh_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$known_hosts" -o ConnectTimeout=10 -p "$port" "$user@$host" \
+    sudo -n -- /usr/local/libexec/my-vpn/edge-user-helper "$action" \
+    ${device_id:+"$device_id"} ${uuid:+"$uuid"}
 }
 
-test -f "$xray_config" -a -f "$client_env"
-install -d -m 0755 -o root -g root /run/lock
-exec 9>"$lock"
-flock -w 30 9
+ordered_edges() {
+  jq -c 'sort_by(if .id == "lt" then 0 else 1 end)[]' "$edges_file"
+}
 
-case "$action" in
-  provision)
-    device_id="$(jq -r '.device_id // empty' <<<"$request")"
-    validate_device_id "$device_id" || exit 2
+state_path() { printf '%s/%s.json' "$state_dir" "$1"; }
+
+provision_device() {
+  local device_id="$1" path uuid edge edge_id response completed_id rollback_edge tmp
+  path="$(state_path "$device_id")"
+  if [[ -f "$path" ]]; then
+    uuid="$(jq -r '.uuid' "$path")"
+    valid_uuid "$uuid" || fail "invalid stored credential"
+  else
+    uuid="$(cat /proc/sys/kernel/random/uuid)"
+    valid_uuid "$uuid" || fail "uuid generation failed"
+  fi
+
+  local -a completed=()
+  while IFS= read -r edge; do
+    edge_id="$(jq -r '.id' <<<"$edge")"
+    if ! response="$(edge_call "$edge" add "$device_id" "$uuid")" ||
+       ! jq -e --arg uuid "$uuid" '.uuid == $uuid and (.state == "active" or .state == "exists")' <<<"$response" >/dev/null; then
+      for completed_id in "${completed[@]}"; do
+        rollback_edge="$(jq -c --arg id "$completed_id" '.[] | select(.id == $id)' "$edges_file")"
+        edge_call "$rollback_edge" remove "$device_id" >/dev/null 2>&1 || true
+      done
+      fail "dual-edge provision failed"
+    fi
+    completed+=("$edge_id")
+  done < <(ordered_edges)
+
+  install -d -m 0700 -o root -g root "$state_dir"
+  tmp="$(mktemp "$state_dir/.device.XXXXXX")"
+  jq -n --arg device_id "$device_id" --arg uuid "$uuid" \
+    '{device_id:$device_id,uuid:$uuid,version:1}' >"$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$path"
+  jq -n --arg path "/api/v1/devices/$device_id/config" \
+    '{version:1,state:"active",config_path:$path}'
+}
+
+revoke_device() {
+  local device_id="$1" edge failed=false
+  while IFS= read -r edge; do
+    if ! edge_call "$edge" remove "$device_id" >/dev/null; then failed=true; fi
+  done < <(ordered_edges)
+  [[ "$failed" == false ]] || fail "dual-edge revoke incomplete"
+  rm -f -- "$(state_path "$device_id")"
+  jq -n '{version:1,state:"revoked"}'
+}
+
+client_config() {
+  local device_id="$1" path uuid edge metadata uri edge_id label uris='[]'
+  path="$(state_path "$device_id")"
+  [[ -r "$path" ]] || fail "device credential unavailable"
+  uuid="$(jq -r '.uuid' "$path")"
+  valid_uuid "$uuid" || fail "invalid stored credential"
+  while IFS= read -r edge; do
+    metadata="$(edge_call "$edge" metadata)"
     jq -e '
-      (.relative_name | type == "string" and length > 0 and length <= 100) and
-      (.device_name | type == "string" and length > 0 and length <= 100) and
-      (.platform | IN("android", "ios", "ipad", "windows", "macos", "linux"))
-    ' <<<"$request" >/dev/null || exit 2
-    uuid="$(find_uuid "$device_id")"
-    if [[ -z "$uuid" ]]; then
-      uuid="$(xray uuid | tr -d '\r\n')"
-      [[ "$uuid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
-      before="$(mktemp /etc/xray/.config.before.XXXXXX)"
-      candidate="$(mktemp --suffix=.json /etc/xray/.config.candidate.XXXXXX)"
-      trap 'rm -f "$before" "$candidate"' EXIT
-      cp --preserve=mode,ownership "$xray_config" "$before"
-      jq --arg id "$uuid" --arg email "device-$device_id" '
-        (.inbounds[] | select(.tag == "my-vpn-reality") | .settings.clients) +=
-          [{"id": $id, "flow": "xtls-rprx-vision", "email": $email}]
-      ' "$xray_config" > "$candidate"
-      validate_candidate "$candidate"
-      runtime_add "$uuid" "device-$device_id"
-      if ! mv -f "$candidate" "$xray_config"; then
-        runtime_remove "device-$device_id" >/dev/null 2>&1 || true
-        install -m 0640 -o xray -g xray "$before" "$xray_config"
-        exit 1
-      fi
-    fi
-    mapfile -t links < <(build_links "$device_id" "$uuid")
-    jq -cn --arg link "${links[1]}" --arg path "/api/v1/devices/$device_id/config" \
-      '{version:1,state:"active",incy_deep_link:$link,config_path:$path}'
-    ;;
-  config)
-    credential="$(jq -r '.credential_ref // empty' <<<"$request")"
-    device_id="$(device_from_credential "$credential")"
-    uuid="$(find_uuid "$device_id")"
-    [[ -n "$uuid" ]] || exit 1
-    mapfile -t links < <(build_links "$device_id" "$uuid")
-    jq -cn --arg uri "${links[0]}" --arg link "${links[1]}" \
-      '{version:1,vless_uri:$uri,incy_deep_link:$link}'
-    ;;
-  revoke)
-    credential="$(jq -r '.credential_ref // empty' <<<"$request")"
-    device_id="$(device_from_credential "$credential")"
-    uuid="$(find_uuid "$device_id")"
-    if [[ -z "$uuid" ]]; then
-      jq -cn '{version:1,state:"absent"}'
-      exit 0
-    fi
-    before="$(mktemp /etc/xray/.config.before.XXXXXX)"
-    candidate="$(mktemp --suffix=.json /etc/xray/.config.candidate.XXXXXX)"
-    trap 'rm -f "$before" "$candidate"' EXIT
-    cp --preserve=mode,ownership "$xray_config" "$before"
-    jq --arg email "device-$device_id" '
-      (.inbounds[] | select(.tag == "my-vpn-reality") | .settings.clients) |=
-        map(select(.email != $email))
-    ' "$xray_config" > "$candidate"
-    validate_candidate "$candidate"
-    runtime_remove "device-$device_id"
-    if ! mv -f "$candidate" "$xray_config"; then
-      runtime_add "$uuid" "device-$device_id" >/dev/null 2>&1 || true
-      install -m 0640 -o xray -g xray "$before" "$xray_config"
-      exit 1
-    fi
-    jq -cn '{version:1,state:"revoked"}'
-    ;;
-esac
+      (.server | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$")) and
+      (.port | type == "number" and . >= 1 and . <= 65535) and
+      (.public_key | test("^[A-Za-z0-9_-]{43}$")) and
+      (.short_id | test("^[0-9a-f]{16}$")) and
+      (.sni | test("^[a-z0-9.-]+$")) and .flow == "xtls-rprx-vision"
+    ' <<<"$metadata" >/dev/null || fail "invalid edge metadata"
+    edge_id="$(jq -r '.id' <<<"$edge")"
+    if [[ "$edge_id" == lt ]]; then label='🇱🇹 Литва 🚀'; else label='🇫🇮 Финляндия 🚀'; fi
+    uri="$(jq -nr --arg uuid "$uuid" --argjson m "$metadata" --arg label "$label" '
+      "vless://\($uuid)@\($m.server):\($m.port)?encryption=none&security=reality&type=tcp&flow=\($m.flow)&sni=\($m.sni)&fp=chrome&pbk=\($m.public_key)&sid=\($m.short_id)#\($label|@uri)"
+    ')"
+    uris="$(jq -c --arg uri "$uri" '. + [$uri]' <<<"$uris")"
+  done < <(ordered_edges)
+  jq -n --argjson uris "$uris" '{version:1,vless_uris:$uris}'
+}
+
+main() {
+  [[ $# == 1 ]] || fail "usage: reality-helper ACTION"
+  validate_config
+  local action="$1" request credential device_id
+  request="$(head -c 65537)"
+  (( ${#request} <= 65536 )) || fail "request too large"
+  jq -e 'type == "object" and .version == 1' <<<"$request" >/dev/null || fail "invalid request"
+  case "$action" in
+    provision)
+      device_id="$(jq -r '.device_id // ""' <<<"$request")"
+      valid_device_id "$device_id" || fail "invalid device id"
+      provision_device "$device_id"
+      ;;
+    revoke|config)
+      credential="$(jq -r '.credential_ref // ""' <<<"$request")"
+      [[ "$credential" == vless-reality:* ]] || fail "invalid credential"
+      device_id="${credential#vless-reality:}"
+      valid_device_id "$device_id" || fail "invalid device id"
+      if [[ "$action" == revoke ]]; then revoke_device "$device_id"; else client_config "$device_id"; fi
+      ;;
+    *) fail "unsupported action" ;;
+  esac
+}
+
+main "$@"

@@ -293,7 +293,7 @@ func (a *API) activate(w http.ResponseWriter, r *http.Request) {
 		"device_id":           activation.Device.ID,
 		"device_name":         activation.Device.DeviceName,
 		"state":               activation.Device.State,
-		"incy_deep_link":      activation.INCYDeepLink,
+		"client_deep_link":    activation.ClientDeepLink,
 		"config_download_url": activation.ConfigDownloadURL,
 		"qr_code_url":         activation.QRCodeURL,
 		"routing_mode":        "ru-direct",
