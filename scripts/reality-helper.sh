@@ -59,7 +59,7 @@ remote_links() {
   short_id="$(jq -r .short_id <<<"$response")"
   sni="$(jq -r .sni <<<"$response")"
   flow="$(jq -r .flow <<<"$response")"
-  fragment="Family-VPN-${device_id:0:8}"
+  fragment="🇫🇮 Финляндия 🚀"
   uri="vless://${uuid}@${server}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=raw#${fragment}"
   encoded="$(printf '%s' "$uri" | base64 -w 0)"
   deep_link="incy://import/${encoded}"
@@ -133,7 +133,7 @@ build_links() {
   [[ "$server" =~ ^[A-Za-z0-9.-]+$ && "$port" =~ ^[0-9]{1,5}$ ]]
   [[ "$public_key" =~ ^[A-Za-z0-9_-]{43}$ && "$short_id" =~ ^[0-9a-f]{16}$ ]]
   [[ "$sni" =~ ^[A-Za-z0-9.-]+$ && "$flow" == xtls-rprx-vision ]]
-  fragment="Family-VPN-${device_id:0:8}"
+  fragment="🇫🇮 Финляндия 🚀"
   uri="vless://${uuid}@${server}:${port}?encryption=none&flow=${flow}&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=raw#${fragment}"
   encoded="$(printf '%s' "$uri" | base64 -w 0)"
   deep_link="incy://import/${encoded}"

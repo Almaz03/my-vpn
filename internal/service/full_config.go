@@ -11,6 +11,8 @@ import (
 
 var fullConfigUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+const familyProxyTag = "🇫🇮 Финляндия 🚀"
+
 var privateNetworks = []string{
 	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
 	"169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4",
@@ -73,7 +75,7 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 		},
 		"outbounds": []any{
 			map[string]any{
-				"tag": "family-proxy", "protocol": "vless",
+				"tag": familyProxyTag, "protocol": "vless",
 				"settings": map[string]any{"vnext": []any{map[string]any{
 					"address": parsed.Hostname(), "port": port,
 					"users": []any{map[string]any{"id": uuid, "encryption": "none", "flow": flow}},
@@ -100,13 +102,13 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 			"domainStrategy": "IPIfNonMatch",
 			"rules": []any{
 				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "ip": []string{"77.88.8.8"}, "outboundTag": "direct"},
-				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "outboundTag": "family-proxy"},
+				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "outboundTag": familyProxyTag},
 				map[string]any{"type": "field", "port": 53, "outboundTag": "dns-out"},
 				map[string]any{"type": "field", "ip": privateNetworks, "outboundTag": "direct"},
 				map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
 				map[string]any{"type": "field", "network": "udp", "port": 443, "outboundTag": "block"},
 				map[string]any{"type": "field", "domain": directDomains, "outboundTag": "direct"},
-				map[string]any{"type": "field", "network": "tcp,udp", "outboundTag": "family-proxy"},
+				map[string]any{"type": "field", "network": "tcp,udp", "outboundTag": familyProxyTag},
 			},
 		},
 	}

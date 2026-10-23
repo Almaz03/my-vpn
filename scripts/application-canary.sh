@@ -80,16 +80,16 @@ if jq -e '
   (.dns.queryStrategy == "UseIPv4") and
 	(.dns.tag == "dns_out") and
   ([.inbounds[]? | select(.protocol == "socks" and .port == 10808)] | length == 1) and
-  ([.outbounds[]? | select(.tag == "family-proxy" and .protocol == "vless")] | length == 1) and
-	([.outbounds[]? | select(.tag == "family-proxy") |
+  ([.outbounds[]? | select(.tag == "🇫🇮 Финляндия 🚀" and .protocol == "vless")] | length == 1) and
+	([.outbounds[]? | select(.tag == "🇫🇮 Финляндия 🚀") |
 	  select(.settings.vnext[0].address | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$"))] | length == 1) and
   ([.outbounds[]? | select(.tag == "direct" and .protocol == "freedom")] | length == 1) and
   ([.outbounds[]? | select(.tag == "block" and .protocol == "blackhole")] | length == 1) and
 	([.routing.rules[]? | select(.outboundTag == "direct" and (.inboundTag == ["dns_out"]) and (.ip == ["77.88.8.8"]))] | length == 1) and
-	([.routing.rules[]? | select(.outboundTag == "family-proxy" and (.inboundTag == ["dns_out"]))] | length == 1) and
+	([.routing.rules[]? | select(.outboundTag == "🇫🇮 Финляндия 🚀" and (.inboundTag == ["dns_out"]))] | length == 1) and
 	([.routing.rules[]? | select(.outboundTag == "dns-out" and .port == 53)] | length == 1) and
 	([.routing.rules[]? | select(.outboundTag == "block" and .network == "udp" and .port == 443)] | length == 1) and
-  ([.routing.rules[]? | select(.outboundTag == "family-proxy" and .network == "tcp,udp")] | length == 1)
+  ([.routing.rules[]? | select(.outboundTag == "🇫🇮 Финляндия 🚀" and .network == "tcp,udp")] | length == 1)
 ' "$work/subscription.txt" >/dev/null 2>&1; then
   echo "application canary: full Xray subscription validated"
 
@@ -107,7 +107,7 @@ if jq -e '
   jq --argjson socks_port "$socks_port" --argjson http_port "$http_port" '
     (.inbounds[] | select(.protocol == "socks") | .port) = $socks_port |
     (.inbounds[] | select(.protocol == "http") | .port) = $http_port |
-    (.outbounds[] | select(.tag == "family-proxy") | .settings.vnext[0].address) = "127.0.0.1"
+    (.outbounds[] | select(.tag == "🇫🇮 Финляндия 🚀") | .settings.vnext[0].address) = "127.0.0.1"
   ' "$work/subscription.txt" > "$client_work/config.json"
   chown -R xray:xray "$client_work"
   chmod 0750 "$client_work"

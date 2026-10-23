@@ -28,7 +28,7 @@ func TestFullXrayConfigUsesTCPRealityTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, outbound := range config.Outbounds {
-		if outbound.Tag != "family-proxy" {
+		if outbound.Tag != familyProxyTag {
 			continue
 		}
 		if outbound.StreamSettings.Network != "tcp" || outbound.StreamSettings.Security != "reality" ||
@@ -37,7 +37,7 @@ func TestFullXrayConfigUsesTCPRealityTransport(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("family-proxy outbound not found")
+	t.Fatal("Finland outbound not found")
 }
 
 func TestFullXrayConfigForcesQUICFallbackToTCP(t *testing.T) {
@@ -58,7 +58,7 @@ func TestFullXrayConfigDoesNotDependOnClientGeodata(t *testing.T) {
 	if strings.Contains(body, "geosite:") || strings.Contains(body, "geoip:") {
 		t.Fatal("INCY config must not depend on possibly stale geosite.dat or geoip.dat assets")
 	}
-	if !strings.Contains(body, `"domain:ru"`) || !strings.Contains(body, `"outboundTag":"family-proxy"`) {
+	if !strings.Contains(body, `"domain:ru"`) || !strings.Contains(body, `"outboundTag":"🇫🇮 Финляндия 🚀"`) {
 		t.Fatal("expected self-contained RU direct rule and proxy fallback")
 	}
 	if len(familyDirectDomains) < 230 {
@@ -78,7 +78,7 @@ func TestFullXrayConfigRoutesDNSBypassAndProxyExplicitly(t *testing.T) {
 	for _, expected := range []string{
 		`"tag":"dns_out"`,
 		`"inboundTag":["dns_out"],"ip":["77.88.8.8"],"outboundTag":"direct"`,
-		`"inboundTag":["dns_out"],"outboundTag":"family-proxy"`,
+		`"inboundTag":["dns_out"],"outboundTag":"🇫🇮 Финляндия 🚀"`,
 		`"outboundTag":"dns-out","port":53`,
 	} {
 		if !strings.Contains(body, expected) {
