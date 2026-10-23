@@ -285,6 +285,17 @@ else
   fi
 fi
 
+# Keep both VPN edges on deterministic IPv4 egress. The client subscription
+# also resolves through IPv4, and mixing an IPv6 exit on only one edge makes
+# failover behavior depend on the destination's address family.
+ipv4_candidate="$(mktemp --suffix=.json /etc/xray/.ipv4-config.XXXXXX)"
+jq '(.outbounds[] | select(.tag == "direct") | .streamSettings.sockopt.domainStrategy) = "ForceIPv4"' \
+  /etc/xray/config.json > "$ipv4_candidate"
+chown "$xray_user:$xray_user" "$ipv4_candidate"
+chmod 0640 "$ipv4_candidate"
+/usr/local/bin/xray run -test -config "$ipv4_candidate" >/dev/null
+mv -f "$ipv4_candidate" /etc/xray/config.json
+
 # The Reality transport connects to the server IP directly, while the owned
 # domain remains the SNI. This mirrors the known-good client configuration and
 # avoids depending on a mobile carrier's DNS before the tunnel is established.
