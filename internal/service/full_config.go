@@ -22,6 +22,24 @@ var privateNetworks = []string{
 	"17.0.0.0/8",
 }
 
+// Telegram publishes and embeds its data-center IPs in the mobile clients, so
+// matching domains alone is not sufficient. Keep Telegram outside the tunnel:
+// this also lets IPv6-capable phones reach it when the VPN edge is IPv4-only.
+var telegramDirectNetworks = []string{
+	"91.105.192.0/23",
+	"91.108.4.0/22",
+	"91.108.8.0/21",
+	"91.108.16.0/22",
+	"91.108.20.0/22",
+	"91.108.56.0/22",
+	"149.154.160.0/20",
+	"185.76.151.0/24",
+	"2001:67c:4e8::/48",
+	"2001:b28:f23c::/48",
+	"2001:b28:f23d::/48",
+	"2001:b28:f23f::/48",
+}
+
 func buildFullXrayConfig(vlessURI string) (string, error) {
 	parsed, err := url.Parse(vlessURI)
 	if err != nil || parsed.Scheme != "vless" || parsed.User == nil || parsed.Hostname() == "" {
@@ -108,6 +126,7 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "outboundTag": familyProxyTag},
 				map[string]any{"type": "field", "port": 53, "outboundTag": "dns-out"},
 				map[string]any{"type": "field", "ip": privateNetworks, "outboundTag": "direct"},
+				map[string]any{"type": "field", "ip": telegramDirectNetworks, "outboundTag": "direct"},
 				map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
 				map[string]any{"type": "field", "network": "udp", "port": 443, "outboundTag": "block"},
 				map[string]any{"type": "field", "domain": directDomains, "outboundTag": "direct"},

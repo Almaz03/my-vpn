@@ -90,3 +90,21 @@ func TestFullXrayConfigRoutesDNSBypassAndProxyExplicitly(t *testing.T) {
 		}
 	}
 }
+
+func TestFullXrayConfigRoutesTelegramDirectly(t *testing.T) {
+	body, err := buildFullXrayConfig("vless://00000000-0000-4000-8000-000000000001@tcp.example.test:443?encryption=none&security=reality&type=raw&flow=xtls-rprx-vision&sni=tcp.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#Family")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`"domain:telegram.org"`,
+		`"domain:t.me"`,
+		`"91.108.4.0/22"`,
+		`"149.154.160.0/20"`,
+		`"2001:b28:f23d::/48"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing Telegram direct route %q", expected)
+		}
+	}
+}
