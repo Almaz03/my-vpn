@@ -147,7 +147,8 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 		t.Fatalf("activate status=%d body=%s", response.Code, response.Body.String())
 	}
 	deepLink, err := url.Parse(activation.DeepLink)
-	if err != nil || deepLink.Scheme != "npvtunnel" || deepLink.Host != "subscribe" {
+	if err != nil || deepLink.Scheme != "onexray" || deepLink.Host != "onexray.com" || deepLink.Path != "/sub/add" ||
+		deepLink.Query().Get("panel") != "generic" || deepLink.Query().Get("mode") != "providerManaged" {
 		t.Fatalf("unsafe deep link=%q", activation.DeepLink)
 	}
 	if !strings.HasPrefix(activation.QRCode, "https://vpn.example.test/s/") || !strings.HasSuffix(activation.QRCode, "/qr") {

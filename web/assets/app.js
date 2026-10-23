@@ -10,19 +10,19 @@
   };
 
   const PLATFORM_HINTS = {
-    android: 'Установите NapsternetV из Google Play и разрешите VPN-подключение.',
-    ios: 'Установите Npv Tunnel из российского App Store, затем подтвердите добавление VPN-конфигурации.',
-    windows: 'Установите Hiddify для Windows, затем скачайте и откройте конфигурацию.',
-    macos: 'Установите Hiddify для macOS, затем скачайте и откройте конфигурацию.',
-    linux: 'Установите Hiddify для Linux, затем скачайте и откройте конфигурацию.'
+    android: 'Установите OneXray из Google Play и разрешите VPN-подключение.',
+    ios: 'Установите OneXray из российского App Store, затем подтвердите добавление VPN-конфигурации.',
+    windows: 'Установите OneXray из Microsoft Store.',
+    macos: 'Установите OneXray из App Store.',
+    linux: 'Установите официальный пакет OneXray для Linux.'
   };
 
   const PLATFORM_CLIENTS = {
-    ios: {name: 'Npv Tunnel', url: 'https://apps.apple.com/ru/app/npv-tunnel/id1629465476', label: 'Открыть в App Store'},
-    android: {name: 'NapsternetV', url: 'https://play.google.com/store/apps/details?id=com.napsternetlabs.napsternetv', label: 'Открыть в Google Play'},
-    windows: {name: 'Hiddify', url: 'https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Windows-Setup-x64.exe', label: 'Скачать для Windows'},
-    macos: {name: 'Hiddify', url: 'https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-MacOS.dmg', label: 'Скачать для macOS'},
-    linux: {name: 'Hiddify', url: 'https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Linux-x64-AppImage.AppImage', label: 'Скачать для Linux'}
+    ios: {name: 'OneXray', url: 'https://apps.apple.com/ru/app/onexray/id6745748773', label: 'Открыть в App Store'},
+    android: {name: 'OneXray', url: 'https://play.google.com/store/apps/details?id=net.yuandev.onexray', label: 'Открыть в Google Play'},
+    windows: {name: 'OneXray', url: 'https://apps.microsoft.com/detail/9NJ0MVHW215D', label: 'Открыть в Microsoft Store'},
+    macos: {name: 'OneXray', url: 'https://apps.apple.com/ru/app/onexray/id6745748773', label: 'Открыть в App Store'},
+    linux: {name: 'OneXray', url: 'https://github.com/YuanDevTeam/OneXray/releases/latest/download/OneXray-linux-x86_64.deb', label: 'Скачать для Linux'}
   };
 
   const form = document.querySelector('#activation-form');
@@ -189,12 +189,9 @@
     document.addEventListener('visibilitychange', onVisibility);
     window.location.assign(deepLink);
     window.setTimeout(() => {
-      if (!appOpened && platform === 'ios') window.location.assign(`npv://subscribe?url=${encodeURIComponent(subscriptionUrl)}`);
-    }, 900);
-    window.setTimeout(() => {
       document.removeEventListener('visibilitychange', onVisibility);
-      if (!appOpened) importHint.textContent = 'Ссылка уже скопирована. Откройте Npv Tunnel → «+» → Import subscription → Paste.';
-    }, 1900);
+      if (!appOpened) importHint.textContent = 'Ссылка уже скопирована. В OneXray добавьте HTTPS-подписку и вставьте её.';
+    }, 1200);
   });
 
   copyLinkButton.addEventListener('click', async () => {
@@ -429,13 +426,8 @@
   function renderResult(data) {
     clearAccessRequestToken();
     clearStatus();
-    const npvDeepLink = safeDeepLink(data.client_deep_link);
-    subscriptionUrl = subscriptionURLFromDeepLink(npvDeepLink);
-    deepLink = platform === 'ios'
-      ? npvDeepLink
-      : platform === 'android' && subscriptionUrl
-        ? `napsternetv://add/${subscriptionUrl}`
-        : '';
+    deepLink = safeDeepLink(data.client_deep_link);
+    subscriptionUrl = subscriptionURLFromDeepLink(deepLink);
     const downloadUrl = safeLocalUrl(data.config_download_url);
     const qrUrl = safeImageUrl(data.qr_code_url);
     const profileAvailable = Boolean(deepLink || downloadUrl || qrUrl);
@@ -470,7 +462,9 @@
     if (typeof value !== 'string' || value.length > 4096) return '';
     try {
       const link = new URL(value);
-      if (link.protocol !== 'npvtunnel:' || link.hostname !== 'subscribe' || [...link.searchParams.keys()].some((key) => key !== 'url')) return '';
+      if (link.protocol !== 'onexray:' || link.hostname !== 'onexray.com' || link.pathname !== '/sub/add') return '';
+      if ([...link.searchParams.keys()].some((key) => !['url', 'panel', 'mode'].includes(key))) return '';
+      if (link.searchParams.get('panel') !== 'generic' || link.searchParams.get('mode') !== 'providerManaged') return '';
       const subscription = new URL(link.searchParams.get('url') || '');
       if (subscription.origin !== window.location.origin || !/^\/s\/[A-Za-z0-9_-]{43}$/.test(subscription.pathname)) return '';
       return value;

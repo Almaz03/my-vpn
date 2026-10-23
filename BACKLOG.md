@@ -6,8 +6,7 @@
 
 ## Принятые решения
 
-- Клиенты: **Npv Tunnel** для российского App Store, **NapsternetV** для
-  Android и Hiddify для настольных систем.
+- Клиент: **OneXray** для iOS, Android, macOS, Windows и Linux.
 - Базовый транспорт: VLESS Vision + Reality на TCP/443.
 - В профиле одновременно находятся два edge: `🇱🇹 Литва 🚀` и
   `🇫🇮 Финляндия 🚀`; встроенный balancer выбирает доступный узел.
@@ -23,7 +22,7 @@
 - [x] Переименовать публичный контракт INCY в нейтральный клиентский контракт.
 - [x] Генерировать полный Xray JSON с двумя Reality outbound, observatory и
       balancer, а не конфиг одного сервера.
-- [x] Выдавать `npvtunnel://subscribe?url=<subscription-url>` и QR этого же
+- [x] Выдавать документированный `onexray://onexray.com/sub/add` и QR этого же
       deep link; оставить HTTPS-загрузку как запасной путь.
 - [x] Обновить сайт: платформенные ссылки на магазины, одна крупная кнопка импорта,
       понятный ручной fallback.

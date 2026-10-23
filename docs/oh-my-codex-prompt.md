@@ -12,7 +12,7 @@ frontend и QA) в репозитории Almaz03/my-vpn. Работай неп�
   не нужна;
 - владелец разрешил пересоздать VPN data plane, но сначала обязателен
   воспроизводимый bootstrap, backup конфигурации и canary;
-- клиент — Npv Tunnel/NapsternetV; один человек = одно устройство;
+- клиент — OneXray с полной Xray JSON-подпиской; один человек = одно устройство;
 - базовый транспорт VLESS Vision + Reality TCP/443 на обоих edge;
 - второй этап — Hysteria2 UDP/443 с валидным TLS;
 - RU-домены и private networks идут direct, остальные через VPN.

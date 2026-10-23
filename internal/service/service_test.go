@@ -18,11 +18,12 @@ import (
 
 type failingProvisioner struct{}
 
-func subscriptionFromNPVDeepLink(t *testing.T, deepLink string) (*url.URL, string) {
+func subscriptionFromOneXrayDeepLink(t *testing.T, deepLink string) (*url.URL, string) {
 	t.Helper()
 	link, err := url.Parse(deepLink)
-	if err != nil || link.Scheme != "npvtunnel" || link.Host != "subscribe" {
-		t.Fatalf("invalid Npv deep link: %q err=%v", deepLink, err)
+	if err != nil || link.Scheme != "onexray" || link.Host != "onexray.com" || link.Path != "/sub/add" ||
+		link.Query().Get("panel") != "generic" || link.Query().Get("mode") != "providerManaged" {
+		t.Fatalf("invalid OneXray deep link: %q err=%v", deepLink, err)
 	}
 	subscription, err := url.Parse(link.Query().Get("url"))
 	if err != nil || subscription.Scheme != "https" || subscription.Host == "" {
@@ -226,10 +227,10 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(activation.ClientDeepLink, "npvtunnel://subscribe?url=") || strings.Contains(activation.ClientDeepLink, "vless://") {
+	if !strings.HasPrefix(activation.ClientDeepLink, "onexray://onexray.com/sub/add?url=") || strings.Contains(activation.ClientDeepLink, "vless://") {
 		t.Fatalf("unsafe activation deep link: %q", activation.ClientDeepLink)
 	}
-	_, token := subscriptionFromNPVDeepLink(t, activation.ClientDeepLink)
+	_, token := subscriptionFromOneXrayDeepLink(t, activation.ClientDeepLink)
 	payload, err := application.Subscription(context.Background(), token)
 	if err != nil || payload.ContentType != "application/json; charset=utf-8" {
 		t.Fatalf("subscription err=%v content-type=%q", err, payload.ContentType)
@@ -300,8 +301,8 @@ func TestSeparateClientsHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T
 	if activations[0].ClientDeepLink == activations[1].ClientDeepLink || activations[0].Device.ID == activations[1].Device.ID {
 		t.Fatal("devices did not receive unique identities and subscriptions")
 	}
-	_, firstToken := subscriptionFromNPVDeepLink(t, activations[0].ClientDeepLink)
-	_, secondToken := subscriptionFromNPVDeepLink(t, activations[1].ClientDeepLink)
+	_, firstToken := subscriptionFromOneXrayDeepLink(t, activations[0].ClientDeepLink)
+	_, secondToken := subscriptionFromOneXrayDeepLink(t, activations[1].ClientDeepLink)
 	if _, err := application.Revoke(context.Background(), activations[0].Device.ID); err != nil {
 		t.Fatal(err)
 	}
