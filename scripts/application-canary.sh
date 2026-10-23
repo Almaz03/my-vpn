@@ -88,6 +88,7 @@ if jq -e '
 	([.routing.rules[]? | select(.outboundTag == "direct" and (.inboundTag == ["dns_out"]) and (.ip == ["77.88.8.8"]))] | length == 1) and
 	([.routing.rules[]? | select(.outboundTag == "family-proxy" and (.inboundTag == ["dns_out"]))] | length == 1) and
 	([.routing.rules[]? | select(.outboundTag == "dns-out" and .port == 53)] | length == 1) and
+	([.routing.rules[]? | select(.outboundTag == "block" and .network == "udp" and .port == 443)] | length == 1) and
   ([.routing.rules[]? | select(.outboundTag == "family-proxy" and .network == "tcp,udp")] | length == 1)
 ' "$work/subscription.txt" >/dev/null 2>&1; then
   echo "application canary: full Xray subscription validated"

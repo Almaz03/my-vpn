@@ -79,8 +79,8 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 					"users": []any{map[string]any{"id": uuid, "encryption": "none", "flow": flow}},
 				}}},
 				"streamSettings": map[string]any{
-					"network": "raw", "security": "reality",
-					"rawSettings": map[string]any{"header": map[string]any{"type": "none"}},
+					"network": "tcp", "security": "reality",
+					"tcpSettings": map[string]any{"header": map[string]any{"type": "none"}},
 					"realitySettings": map[string]any{
 						"show":        false,
 						"fingerprint": fingerprint, "serverName": serverName,
@@ -104,6 +104,7 @@ func buildFullXrayConfig(vlessURI string) (string, error) {
 				map[string]any{"type": "field", "port": 53, "outboundTag": "dns-out"},
 				map[string]any{"type": "field", "ip": privateNetworks, "outboundTag": "direct"},
 				map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
+				map[string]any{"type": "field", "network": "udp", "port": 443, "outboundTag": "block"},
 				map[string]any{"type": "field", "domain": directDomains, "outboundTag": "direct"},
 				map[string]any{"type": "field", "network": "tcp,udp", "outboundTag": "family-proxy"},
 			},

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestFullXrayConfigUsesRawRealityTransport(t *testing.T) {
+func TestFullXrayConfigUsesTCPRealityTransport(t *testing.T) {
 	body, err := buildFullXrayConfig("vless://00000000-0000-4000-8000-000000000001@vpn.example.test:8443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=vpn.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#Family")
 	if err != nil {
 		t.Fatal(err)
@@ -31,13 +31,23 @@ func TestFullXrayConfigUsesRawRealityTransport(t *testing.T) {
 		if outbound.Tag != "family-proxy" {
 			continue
 		}
-		if outbound.StreamSettings.Network != "raw" || outbound.StreamSettings.Security != "reality" ||
+		if outbound.StreamSettings.Network != "tcp" || outbound.StreamSettings.Security != "reality" ||
 			outbound.StreamSettings.RealitySettings.Show || outbound.StreamSettings.RealitySettings.SpiderX != "/" {
 			t.Fatalf("unexpected Reality stream settings: %#v", outbound.StreamSettings)
 		}
 		return
 	}
 	t.Fatal("family-proxy outbound not found")
+}
+
+func TestFullXrayConfigForcesQUICFallbackToTCP(t *testing.T) {
+	body, err := buildFullXrayConfig("vless://00000000-0000-4000-8000-000000000001@tcp.example.test:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=tcp.example.test&fp=chrome&pbk=public&sid=0123456789abcdef#Family")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"network":"udp","outboundTag":"block","port":443`) {
+		t.Fatal("expected UDP/443 to be blocked so HTTP/3 falls back to TCP")
+	}
 }
 
 func TestFullXrayConfigDoesNotDependOnClientGeodata(t *testing.T) {
