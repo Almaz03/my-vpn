@@ -21,7 +21,7 @@ type failingProvisioner struct{}
 func subscriptionFromNPVDeepLink(t *testing.T, deepLink string) (*url.URL, string) {
 	t.Helper()
 	link, err := url.Parse(deepLink)
-	if err != nil || link.Scheme != "npv" || link.Host != "subscribe" {
+	if err != nil || link.Scheme != "npvtunnel" || link.Host != "subscribe" {
 		t.Fatalf("invalid Npv deep link: %q err=%v", deepLink, err)
 	}
 	subscription, err := url.Parse(link.Query().Get("url"))
@@ -226,7 +226,7 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(activation.ClientDeepLink, "npv://subscribe?url=") || strings.Contains(activation.ClientDeepLink, "vless://") {
+	if !strings.HasPrefix(activation.ClientDeepLink, "npvtunnel://subscribe?url=") || strings.Contains(activation.ClientDeepLink, "vless://") {
 		t.Fatalf("unsafe activation deep link: %q", activation.ClientDeepLink)
 	}
 	_, token := subscriptionFromNPVDeepLink(t, activation.ClientDeepLink)

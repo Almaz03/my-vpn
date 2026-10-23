@@ -61,6 +61,7 @@
 
   let platform = detectPlatform();
   let deepLink = '';
+  let subscriptionUrl = '';
   let nextAttemptAt = 0;
   let requestToken = '';
   let pollTimer = 0;
@@ -178,16 +179,29 @@
     clearStatus();
   });
 
-  importButton.addEventListener('click', () => {
+  importButton.addEventListener('click', async () => {
     if (!deepLink) return;
+    if (subscriptionUrl) await copyText(subscriptionUrl);
+    let appOpened = false;
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') appOpened = true;
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     window.location.assign(deepLink);
+    window.setTimeout(() => {
+      if (!appOpened && platform === 'ios') window.location.assign(`npv://subscribe?url=${encodeURIComponent(subscriptionUrl)}`);
+    }, 900);
+    window.setTimeout(() => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (!appOpened) importHint.textContent = 'Ссылка уже скопирована. Откройте Npv Tunnel → «+» → Import subscription → Paste.';
+    }, 1900);
   });
 
   copyLinkButton.addEventListener('click', async () => {
-    if (!deepLink || !navigator.clipboard || !window.isSecureContext) return;
+    if (!subscriptionUrl || !navigator.clipboard || !window.isSecureContext) return;
     try {
-      await navigator.clipboard.writeText(deepLink);
-      copyLinkButton.textContent = 'Ссылка скопирована';
+      await navigator.clipboard.writeText(subscriptionUrl);
+      copyLinkButton.textContent = 'Ссылка подписки скопирована';
     } catch {
       copyLinkButton.textContent = 'Не удалось скопировать';
     }
@@ -415,7 +429,13 @@
   function renderResult(data) {
     clearAccessRequestToken();
     clearStatus();
-    deepLink = platform === 'ios' || platform === 'android' ? safeDeepLink(data.client_deep_link) : '';
+    const npvDeepLink = safeDeepLink(data.client_deep_link);
+    subscriptionUrl = subscriptionURLFromDeepLink(npvDeepLink);
+    deepLink = platform === 'ios'
+      ? npvDeepLink
+      : platform === 'android' && subscriptionUrl
+        ? `napsternetv://add/${subscriptionUrl}`
+        : '';
     const downloadUrl = safeLocalUrl(data.config_download_url);
     const qrUrl = safeImageUrl(data.qr_code_url);
     const profileAvailable = Boolean(deepLink || downloadUrl || qrUrl);
@@ -432,7 +452,7 @@
       : 'Кнопка импорта появится после безопасного создания отдельного профиля для устройства.';
 
     importButton.hidden = !deepLink;
-    copyLinkButton.hidden = !deepLink || !navigator.clipboard || !window.isSecureContext;
+    copyLinkButton.hidden = !subscriptionUrl || !navigator.clipboard || !window.isSecureContext;
     downloadLink.hidden = !downloadUrl;
     if (downloadUrl) downloadLink.href = downloadUrl;
 
@@ -450,10 +470,23 @@
     if (typeof value !== 'string' || value.length > 4096) return '';
     try {
       const link = new URL(value);
-      if (link.protocol !== 'npv:' || link.hostname !== 'subscribe' || [...link.searchParams.keys()].some((key) => key !== 'url')) return '';
+      if (link.protocol !== 'npvtunnel:' || link.hostname !== 'subscribe' || [...link.searchParams.keys()].some((key) => key !== 'url')) return '';
       const subscription = new URL(link.searchParams.get('url') || '');
       if (subscription.origin !== window.location.origin || !/^\/s\/[A-Za-z0-9_-]{43}$/.test(subscription.pathname)) return '';
       return value;
+    } catch {
+      return '';
+    }
+  }
+
+  function subscriptionURLFromDeepLink(value) {
+    if (!value) return '';
+    try {
+      const link = new URL(value);
+      const subscription = new URL(link.searchParams.get('url') || '');
+      return subscription.origin === window.location.origin && /^\/s\/[A-Za-z0-9_-]{43}$/.test(subscription.pathname)
+        ? subscription.href
+        : '';
     } catch {
       return '';
     }

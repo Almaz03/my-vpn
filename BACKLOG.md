@@ -23,7 +23,7 @@
 - [x] Переименовать публичный контракт INCY в нейтральный клиентский контракт.
 - [x] Генерировать полный Xray JSON с двумя Reality outbound, observatory и
       balancer, а не конфиг одного сервера.
-- [x] Выдавать `npv://subscribe?url=<subscription-url>` и QR этого же
+- [x] Выдавать `npvtunnel://subscribe?url=<subscription-url>` и QR этого же
       deep link; оставить HTTPS-загрузку как запасной путь.
 - [x] Обновить сайт: платформенные ссылки на магазины, одна крупная кнопка импорта,
       понятный ручной fallback.

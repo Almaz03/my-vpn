@@ -340,7 +340,7 @@ func (s *Service) SubscriptionDeepLink(token string) string {
 }
 
 func npvDeepLink(subscriptionURL string) string {
-	return "npv://subscribe?url=" + url.QueryEscape(subscriptionURL)
+	return "npvtunnel://subscribe?url=" + url.QueryEscape(subscriptionURL)
 }
 
 func (s *Service) RoutingProfile() RoutingProfile {
