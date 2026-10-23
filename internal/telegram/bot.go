@@ -11,9 +11,22 @@ import (
 )
 
 const (
-	defaultInviteTTL = 10 * time.Minute
+	defaultInviteTTL = 5 * time.Minute
 	maxTelegramText  = 4000
 )
+
+type inviteStage uint8
+
+const (
+	inviteAwaitName inviteStage = iota + 1
+	inviteAwaitDevice
+)
+
+type inviteDraft struct {
+	stage        inviteStage
+	relativeName string
+	ttl          time.Duration
+}
 
 // Application deliberately exposes no VPN credentials, configuration bodies,
 // or import URLs to the Telegram transport.
@@ -51,14 +64,14 @@ type SystemStatus struct {
 }
 
 type Bot struct {
-	api         *apiClient
-	app         Application
-	allowlist   Allowlist
-	offsets     OffsetStore
-	admins      []int64
-	sleep       func(context.Context, time.Duration) error
-	inviteMu    sync.Mutex
-	awaitInvite map[int64]bool
+	api       *apiClient
+	app       Application
+	allowlist Allowlist
+	offsets   OffsetStore
+	admins    []int64
+	sleep     func(context.Context, time.Duration) error
+	inviteMu  sync.Mutex
+	invites   map[int64]inviteDraft
 }
 
 type Config struct {
@@ -93,7 +106,7 @@ func New(config Config) (*Bot, error) {
 	admins := append([]int64(nil), config.Admins...)
 	return &Bot{
 		api: client, app: config.Application, allowlist: allowlist, admins: admins,
-		offsets: store, sleep: sleepContext, awaitInvite: make(map[int64]bool),
+		offsets: store, sleep: sleepContext, invites: make(map[int64]inviteDraft),
 	}, nil
 }
 
@@ -166,19 +179,33 @@ func (b *Bot) handleUpdate(ctx context.Context, update apiUpdate) error {
 	if !b.allowlist.Authorized(message.From.ID) {
 		return b.api.sendMessage(ctx, message.Chat.ID, "Команда недоступна.", nil)
 	}
-	if b.takeInvitePrompt(message.Chat.ID, message.Text) {
-		return b.createInvitation(ctx, message.Chat.ID, message.Text)
+	if handled, err := b.continueInvitation(ctx, message.Chat.ID, message.Text); handled {
+		return err
 	}
 	command, argument := splitCommand(message.Text)
+	if command != "" && command != "/invite" && command != "/new" {
+		b.clearInvitation(message.Chat.ID)
+	}
 	switch command {
 	case "/start", "/help":
 		return b.api.sendMessage(ctx, message.Chat.ID, helpText(), mainMenu())
 	case "/invite", "/new":
-		if strings.TrimSpace(argument) == "" {
-			b.setInvitePrompt(message.Chat.ID)
-			return b.api.sendMessage(ctx, message.Chat.ID, "Отправь одним сообщением:\nИмя | Устройство | 10\n\n10 — срок действия кода в минутах.", mainMenu())
+		argument = strings.TrimSpace(argument)
+		if strings.Contains(argument, "|") {
+			return b.createInvitation(ctx, message.Chat.ID, argument)
 		}
-		return b.createInvitation(ctx, message.Chat.ID, argument)
+		ttl := defaultInviteTTL
+		if argument != "" {
+			minutes, err := strconv.Atoi(argument)
+			if err != nil || minutes < 1 || minutes > 60 {
+				return b.api.sendMessage(ctx, message.Chat.ID, "Использование: /invite\nИли /invite 15, чтобы изменить срок действия кода.", nil)
+			}
+			ttl = time.Duration(minutes) * time.Minute
+		}
+		b.startInvitation(message.Chat.ID, ttl)
+		return b.api.sendMessage(ctx, message.Chat.ID, "Как зовут человека?", mainMenu())
+	case "/cancel":
+		return b.api.sendMessage(ctx, message.Chat.ID, "Создание приглашения отменено.", mainMenu())
 	case "/devices":
 		return b.listDevices(ctx, message.Chat.ID, false)
 	case "/revoked":
@@ -266,13 +293,23 @@ func (b *Bot) createInvitation(ctx context.Context, chatID int64, argument strin
 	if relativeName == "" || deviceName == "" || len([]rune(relativeName)) > 100 || len([]rune(deviceName)) > 100 {
 		return b.api.sendMessage(ctx, chatID, "Имя родственника и устройства должны содержать от 1 до 100 символов.", nil)
 	}
+	return b.createInvitationFields(ctx, chatID, relativeName, deviceName, ttl)
+}
+
+func (b *Bot) createInvitationFields(ctx context.Context, chatID int64, relativeName, deviceName string, ttl time.Duration) error {
+	if relativeName == "" || deviceName == "" || len([]rune(relativeName)) > 100 || len([]rune(deviceName)) > 100 {
+		return b.api.sendMessage(ctx, chatID, "Имя человека и устройства должны содержать от 1 до 100 символов.", nil)
+	}
 	invitation, err := b.app.CreateInvitation(ctx, relativeName, deviceName, ttl)
 	if err != nil {
 		return b.api.sendMessage(ctx, chatID, "Не удалось создать приглашение. Повторите позже.", nil)
 	}
 	expires := invitation.ExpiresAt.In(time.Local).Format("15:04:05")
 	message := fmt.Sprintf("Одноразовый код: %s\nДействует до: %s\nПередайте родственнику только этот код.", invitation.Code, expires)
-	return b.api.sendMessage(ctx, chatID, message, nil)
+	keyboard := &inlineKeyboard{InlineKeyboard: [][]inlineButton{{{
+		Text: "📋 Скопировать код", CopyText: &copyTextButton{Text: invitation.Code},
+	}}}}
+	return b.api.sendMessage(ctx, chatID, message, keyboard)
 }
 
 func (b *Bot) listDevices(ctx context.Context, chatID int64, revokedOnly bool) error {
@@ -367,7 +404,7 @@ func splitCommand(text string) (string, string) {
 }
 
 func helpText() string {
-	return "Выбери действие кнопкой ниже.\n\nКоманды также доступны:\n/invite Имя | Устройство | 10\n/devices\n/revoked\n/revoke ID\n/status"
+	return "Выбери действие кнопкой ниже.\n\nКоманды также доступны:\n/invite — код на 5 минут\n/invite 15 — другой срок\n/cancel — отменить ввод\n/devices\n/revoked\n/revoke ID\n/status"
 }
 
 func mainMenu() *replyKeyboard {
@@ -381,32 +418,49 @@ func mainMenu() *replyKeyboard {
 	}
 }
 
-func (b *Bot) setInvitePrompt(chatID int64) {
+func (b *Bot) startInvitation(chatID int64, ttl time.Duration) {
 	b.inviteMu.Lock()
-	b.awaitInvite[chatID] = true
+	b.invites[chatID] = inviteDraft{stage: inviteAwaitName, ttl: ttl}
 	b.inviteMu.Unlock()
 }
 
-func (b *Bot) takeInvitePrompt(chatID int64, text string) bool {
+func (b *Bot) clearInvitation(chatID int64) {
+	b.inviteMu.Lock()
+	delete(b.invites, chatID)
+	b.inviteMu.Unlock()
+}
+
+func (b *Bot) continueInvitation(ctx context.Context, chatID int64, text string) (bool, error) {
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "/") {
-		return false
+		return false, nil
 	}
 	if isMenuButton(trimmed) {
 		if trimmed != "➕ Приглашение" {
-			b.inviteMu.Lock()
-			delete(b.awaitInvite, chatID)
-			b.inviteMu.Unlock()
+			b.clearInvitation(chatID)
 		}
-		return false
+		return false, nil
 	}
 	b.inviteMu.Lock()
-	defer b.inviteMu.Unlock()
-	if !b.awaitInvite[chatID] {
-		return false
+	draft, ok := b.invites[chatID]
+	if !ok {
+		b.inviteMu.Unlock()
+		return false, nil
 	}
-	delete(b.awaitInvite, chatID)
-	return true
+	if trimmed == "" || len([]rune(trimmed)) > 100 {
+		b.inviteMu.Unlock()
+		return true, b.api.sendMessage(ctx, chatID, "Введите от 1 до 100 символов.", nil)
+	}
+	if draft.stage == inviteAwaitName {
+		draft.stage = inviteAwaitDevice
+		draft.relativeName = trimmed
+		b.invites[chatID] = draft
+		b.inviteMu.Unlock()
+		return true, b.api.sendMessage(ctx, chatID, "Как называется устройство? Например: iPhone", mainMenu())
+	}
+	delete(b.invites, chatID)
+	b.inviteMu.Unlock()
+	return true, b.createInvitationFields(ctx, chatID, draft.relativeName, trimmed, draft.ttl)
 }
 
 func isMenuButton(text string) bool {

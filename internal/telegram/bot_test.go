@@ -139,6 +139,10 @@ func TestInviteCommandCreatesShortLivedCode(t *testing.T) {
 	if !strings.Contains(text, "ABCD-EFGH") || strings.Contains(strings.ToLower(text), "private") || strings.Contains(text, "vless://") {
 		t.Fatalf("unexpected Telegram text: %q", text)
 	}
+	markup, _ := json.Marshal((*requests)[0].body["reply_markup"])
+	if !strings.Contains(string(markup), `"copy_text":{"text":"ABCD-EFGH"}`) {
+		t.Fatalf("copy button missing: %s", markup)
+	}
 }
 
 func TestDevicesAndRevokeCallback(t *testing.T) {
@@ -209,7 +213,7 @@ func TestMenuButtonsAndInvitationPrompt(t *testing.T) {
 	app := &fakeApplication{invitationCode: "ABCD-EFGH"}
 	bot := newTestBot(t, server, app)
 
-	messages := []string{"/start", "➕ Приглашение", "Мама | iPhone | 10"}
+	messages := []string{"/start", "➕ Приглашение", "Мама", "iPhone"}
 	for _, text := range messages {
 		if err := bot.handleUpdate(context.Background(), apiUpdate{Message: &apiMessage{
 			From: &apiUser{ID: 42}, Chat: apiChat{ID: 42}, Text: text,
@@ -217,15 +221,40 @@ func TestMenuButtonsAndInvitationPrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(*requests) != 3 {
+	if len(*requests) != 4 {
 		t.Fatalf("unexpected requests: %#v", *requests)
 	}
 	menu, ok := (*requests)[0].body["reply_markup"].(map[string]any)
 	if !ok || menu["keyboard"] == nil {
 		t.Fatalf("persistent menu missing: %#v", (*requests)[0].body)
 	}
-	if app.createCalls != 1 || app.relativeName != "Мама" || app.deviceName != "iPhone" || app.ttl != 10*time.Minute {
+	if app.createCalls != 1 || app.relativeName != "Мама" || app.deviceName != "iPhone" || app.ttl != 5*time.Minute {
 		t.Fatalf("unexpected invitation from button flow: %#v", app)
+	}
+	if (*requests)[1].body["text"] != "Как зовут человека?" || !strings.Contains((*requests)[2].body["text"].(string), "устройство") {
+		t.Fatalf("unexpected invitation prompts: %#v", *requests)
+	}
+	markup, _ := json.Marshal((*requests)[3].body["reply_markup"])
+	if !strings.Contains(string(markup), `"copy_text":{"text":"ABCD-EFGH"}`) {
+		t.Fatalf("copy button missing: %s", markup)
+	}
+}
+
+func TestInviteCommandCanOverrideDefaultTTL(t *testing.T) {
+	server, _ := telegramServer(t)
+	defer server.Close()
+	app := &fakeApplication{invitationCode: "ABCD-EFGH"}
+	bot := newTestBot(t, server, app)
+
+	for _, text := range []string{"/invite 15", "Папа", "MacBook"} {
+		if err := bot.handleUpdate(context.Background(), apiUpdate{Message: &apiMessage{
+			From: &apiUser{ID: 42}, Chat: apiChat{ID: 42}, Text: text,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if app.createCalls != 1 || app.relativeName != "Папа" || app.deviceName != "MacBook" || app.ttl != 15*time.Minute {
+		t.Fatalf("unexpected invitation: %#v", app)
 	}
 }
 
