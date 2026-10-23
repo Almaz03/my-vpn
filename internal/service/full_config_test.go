@@ -51,4 +51,11 @@ func TestFullXrayConfigDoesNotDependOnClientGeodata(t *testing.T) {
 	if !strings.Contains(body, `"domain:ru"`) || !strings.Contains(body, `"outboundTag":"family-proxy"`) {
 		t.Fatal("expected self-contained RU direct rule and proxy fallback")
 	}
+	if len(familyDirectDomains) < 230 {
+		t.Fatalf("RU-direct allowlist unexpectedly shrank to %d entries", len(familyDirectDomains))
+	}
+	if !strings.Contains(body, `"domain:2gis.com"`) || !strings.Contains(body, `"domain:ozon.com"`) ||
+		!strings.Contains(body, `"domain:yandex.com"`) || !strings.Contains(body, `"17.0.0.0/8"`) {
+		t.Fatal("expected extended known-good direct routing rules")
+	}
 }

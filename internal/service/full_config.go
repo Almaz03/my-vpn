@@ -11,18 +11,10 @@ import (
 
 var fullConfigUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-var familyDirectDomains = []string{
-	"domain:ru", "domain:su", "domain:рф", "domain:xn--p1ai",
-	"domain:vk.com", "domain:mail.ru", "domain:ok.ru",
-	"domain:yandex.com", "domain:ya.ru", "domain:dzen.ru",
-	"domain:gosuslugi.ru", "domain:nalog.gov.ru", "domain:mos.ru",
-	"domain:sberbank.ru", "domain:tbank.ru", "domain:alfabank.ru",
-	"domain:ozon.ru", "domain:wildberries.ru",
-}
-
 var privateNetworks = []string{
 	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
 	"169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4",
+	"17.0.0.0/8",
 }
 
 func buildFullXrayConfig(vlessURI string) (string, error) {
