@@ -38,8 +38,15 @@ echo "reality canary: temporary client provisioned"
 rm -f "$work/provision.json"
 
 config_request="$(jq -cn --arg credential "vless-reality:$device_id" '{version:1,credential_ref:$credential}')"
-config_response="$(printf '%s' "$config_request" | /usr/local/libexec/my-vpn/reality-helper config)"
-[[ "$(jq -r '.vless_uris | length' <<<"$config_response")" == 2 ]]
+if ! config_response="$(printf '%s' "$config_request" | /usr/local/libexec/my-vpn/reality-helper config)"; then
+  echo "reality canary: dual-edge client configuration unavailable" >&2
+  exit 1
+fi
+if [[ "$(jq -r '.vless_uris | length' <<<"$config_response")" != 2 ]]; then
+  echo "reality canary: expected exactly two edge URIs" >&2
+  exit 1
+fi
+echo "reality canary: dual-edge client configuration loaded"
 test_edge() {
   local index="$1" uri authority uuid server_and_query server_authority server client_server server_port
   local query public_key short_id sni port ready

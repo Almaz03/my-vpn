@@ -56,7 +56,8 @@ ordered_edges() {
 state_path() { printf '%s/%s.json' "$state_dir" "$1"; }
 
 provision_device() {
-  local device_id="$1" path uuid edge edge_id response completed_id rollback_edge tmp
+  local device_id="$1" path uuid edge edge_id response metadata completed_id rollback_edge tmp
+  local metadata_list='[]'
   path="$(state_path "$device_id")"
   if [[ -f "$path" ]]; then
     uuid="$(jq -r '.uuid' "$path")"
@@ -78,12 +79,27 @@ provision_device() {
       fail "dual-edge provision failed"
     fi
     completed+=("$edge_id")
+    if ! metadata="$(edge_call "$edge" metadata)" || ! jq -e '
+      (.server | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$")) and
+      (.port | type == "number" and . >= 1 and . <= 65535) and
+      (.public_key | test("^[A-Za-z0-9_-]{43}$")) and
+      (.short_id | test("^[0-9a-f]{16}$")) and
+      (.sni | test("^[a-z0-9.-]+$")) and .flow == "xtls-rprx-vision"
+    ' <<<"$metadata" >/dev/null; then
+      for completed_id in "${completed[@]}"; do
+        rollback_edge="$(jq -c --arg id "$completed_id" '.[] | select(.id == $id)' "$edges_file")"
+        edge_call "$rollback_edge" remove "$device_id" >/dev/null 2>&1 || true
+      done
+      fail "dual-edge metadata unavailable"
+    fi
+    metadata_list="$(jq -c --arg id "$edge_id" --argjson metadata "$metadata" \
+      '. + [({id:$id} + $metadata)]' <<<"$metadata_list")"
   done < <(ordered_edges)
 
   install -d -m 0700 -o root -g root "$state_dir"
   tmp="$(mktemp "$state_dir/.device.XXXXXX")"
-  jq -n --arg device_id "$device_id" --arg uuid "$uuid" \
-    '{device_id:$device_id,uuid:$uuid,version:1}' >"$tmp"
+  jq -n --arg device_id "$device_id" --arg uuid "$uuid" --argjson edges "$metadata_list" \
+    '{device_id:$device_id,uuid:$uuid,version:2,edges:$edges}' >"$tmp"
   chmod 0600 "$tmp"
   mv -f "$tmp" "$path"
   jq -n --arg path "/api/v1/devices/$device_id/config" \
@@ -101,13 +117,13 @@ revoke_device() {
 }
 
 client_config() {
-  local device_id="$1" path uuid edge metadata uri edge_id label uris='[]'
+  local device_id="$1" path uuid metadata uri edge_id label uris='[]'
   path="$(state_path "$device_id")"
   [[ -r "$path" ]] || fail "device credential unavailable"
   uuid="$(jq -r '.uuid' "$path")"
   valid_uuid "$uuid" || fail "invalid stored credential"
-  while IFS= read -r edge; do
-    metadata="$(edge_call "$edge" metadata)"
+  jq -e '.version == 2 and ([.edges[].id] | sort == ["fi", "lt"])' "$path" >/dev/null || fail "device edge metadata unavailable"
+  while IFS= read -r metadata; do
     jq -e '
       (.server | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$")) and
       (.port | type == "number" and . >= 1 and . <= 65535) and
@@ -115,13 +131,13 @@ client_config() {
       (.short_id | test("^[0-9a-f]{16}$")) and
       (.sni | test("^[a-z0-9.-]+$")) and .flow == "xtls-rprx-vision"
     ' <<<"$metadata" >/dev/null || fail "invalid edge metadata"
-    edge_id="$(jq -r '.id' <<<"$edge")"
+    edge_id="$(jq -r '.id' <<<"$metadata")"
     if [[ "$edge_id" == lt ]]; then label='🇱🇹 Литва 🚀'; else label='🇫🇮 Финляндия 🚀'; fi
     uri="$(jq -nr --arg uuid "$uuid" --argjson m "$metadata" --arg label "$label" '
       "vless://\($uuid)@\($m.server):\($m.port)?encryption=none&security=reality&type=tcp&flow=\($m.flow)&sni=\($m.sni)&fp=chrome&pbk=\($m.public_key)&sid=\($m.short_id)#\($label|@uri)"
     ')"
     uris="$(jq -c --arg uri "$uri" '. + [$uri]' <<<"$uris")"
-  done < <(ordered_edges)
+  done < <(jq -c '.edges | sort_by(if .id == "lt" then 0 else 1 end)[]' "$path")
   jq -n --argjson uris "$uris" '{version:1,vless_uris:$uris}'
 }
 
