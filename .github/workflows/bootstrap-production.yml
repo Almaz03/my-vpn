@@ -119,6 +119,42 @@ jobs:
              sudo install -m 0600 -o root -g root '$remote_dir/edge-known-hosts' /etc/my-vpn/edge-known-hosts && \
              sudo install -m 0600 -o root -g root '$remote_dir/edge-controller.env' /etc/my-vpn/edge-controller.env"
 
+      - name: Verify control-plane provisioning through edge
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          BOOTSTRAP_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          ssh_args=(-i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -p "$DEPLOY_PORT")
+          device_id="$(openssl rand -hex 16)"
+          invoke_helper() {
+            local action="$1" request="$2" encoded
+            encoded="$(printf '%s' "$request" | base64 -w 0)"
+            ssh "${ssh_args[@]}" "$BOOTSTRAP_USER@$DEPLOY_HOST" \
+              "printf '%s' '$encoded' | base64 -d | sudo /usr/local/libexec/my-vpn/reality-helper '$action'"
+          }
+          cleanup() {
+            request="$(jq -cn --arg credential "vless-reality:$device_id" '{version:1,credential_ref:$credential}')"
+            invoke_helper revoke "$request" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          request="$(jq -cn --arg device_id "$device_id" \
+            '{version:1,device_id:$device_id,relative_name:"Edge canary",device_name:"GitHub Actions",platform:"linux"}')"
+          provisioned="$(invoke_helper provision "$request")"
+          jq -e --arg device_id "$device_id" \
+            '.version == 1 and .state == "active" and .config_path == ("/api/v1/devices/" + $device_id + "/config")' \
+            <<<"$provisioned" >/dev/null
+          request="$(jq -cn --arg credential "vless-reality:$device_id" '{version:1,credential_ref:$credential}')"
+          configured="$(invoke_helper config "$request")"
+          jq -e '.version == 1 and (.vless_uri | startswith("vless://") and contains("@217.147.13.228:443?") and contains("security=reality"))' \
+            <<<"$configured" >/dev/null
+          cleanup
+          trap - EXIT
+          echo 'Control plane provisioned and revoked a temporary edge device.'
+
       - name: Verify dedicated deployment login
         shell: bash
         env:
