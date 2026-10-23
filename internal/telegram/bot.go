@@ -56,6 +56,7 @@ type Device struct {
 type SystemStatus struct {
 	Portal      string
 	VPN         string
+	Edges       string
 	Certificate string
 	CPU         string
 	Memory      string
@@ -376,8 +377,8 @@ func (b *Bot) status(ctx context.Context, chatID int64) error {
 	if err != nil {
 		return b.api.sendMessage(ctx, chatID, "Не удалось получить состояние системы.", nil)
 	}
-	message := fmt.Sprintf("Портал: %s\nVPN: %s\nСертификат: %s\nCPU: %s\nRAM: %s\nДиск: %s\nСеть: %s",
-		safeField(status.Portal), safeField(status.VPN), safeField(status.Certificate), safeField(status.CPU),
+	message := fmt.Sprintf("Портал: %s\nVPN: %s\nУзлы профиля: %s\nСертификат: %s\nCPU: %s\nRAM: %s\nДиск: %s\nСеть: %s",
+		safeField(status.Portal), safeField(status.VPN), safeField(status.Edges), safeField(status.Certificate), safeField(status.CPU),
 		safeField(status.Memory), safeField(status.Disk), safeField(status.Network))
 	return b.api.sendMessage(ctx, chatID, truncate(message), nil)
 }

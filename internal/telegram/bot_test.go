@@ -307,6 +307,29 @@ func TestApplicationErrorsDoNotLeak(t *testing.T) {
 	}
 }
 
+func TestStatusListsAllVPNProfileEdges(t *testing.T) {
+	server, requests := telegramServer(t)
+	defer server.Close()
+	app := &fakeApplication{status: SystemStatus{
+		Portal: "ok", VPN: "vless-reality", Edges: "🇱🇹 Литва 🚀 · 🇫🇮 Финляндия 🚀",
+		Certificate: "ok", CPU: "2 vCPU", Memory: "10 MiB", Disk: "20 GiB", Network: "443/tcp",
+	}}
+	bot := newTestBot(t, server, app)
+
+	if err := bot.handleUpdate(context.Background(), apiUpdate{Message: &apiMessage{
+		From: &apiUser{ID: 42}, Chat: apiChat{ID: 42}, Text: "/status",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*requests) != 1 {
+		t.Fatalf("requests=%#v", *requests)
+	}
+	text, _ := (*requests)[0].body["text"].(string)
+	if !strings.Contains(text, "Узлы профиля: 🇱🇹 Литва 🚀 · 🇫🇮 Финляндия 🚀") {
+		t.Fatalf("status=%q", text)
+	}
+}
+
 func TestFileOffsetStoreRoundTripAndPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "telegram.offset")
 	store := FileOffsetStore{Path: path}
