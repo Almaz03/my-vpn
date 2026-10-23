@@ -18,6 +18,11 @@ deploy_key="$bundle_root/deploy-authorized-key.pub"
 for path in "$deploy_key" "$bundle_root/deploy/xray.service" "$bundle_root/deploy/edge.Caddyfile" "$bundle_root/deploy/my-vpn-edge.sudoers" "$bundle_root/scripts/edge-user-helper.sh"; do test -f "$path"; done
 ssh-keygen -lf "$deploy_key" >/dev/null
 
+caddy_preexisting=false
+if command -v caddy >/dev/null 2>&1; then
+  caddy_preexisting=true
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install --yes --no-install-recommends ca-certificates caddy curl jq openssl sudo ufw unzip
@@ -74,10 +79,11 @@ xray run -test -config /etc/xray/config.json >/dev/null
 
 install -d -m 0755 /etc/caddy/conf.d
 if ! grep -Eq '^[[:space:]]*import[[:space:]]+conf\.d/\*' /etc/caddy/Caddyfile; then
-  if systemctl is-active --quiet caddy.service; then
+  if [[ "$caddy_preexisting" == true ]] && systemctl is-active --quiet caddy.service; then
     echo 'active unmanaged Caddy configuration found' >&2
     exit 1
   fi
+  systemctl stop caddy.service >/dev/null 2>&1 || true
   printf 'import conf.d/*\n' > /etc/caddy/Caddyfile
 fi
 sed "s/{\$EDGE_SNI}/$edge_sni/g" "$bundle_root/deploy/edge.Caddyfile" > /etc/caddy/conf.d/my-vpn-edge.caddy

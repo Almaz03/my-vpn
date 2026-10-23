@@ -8,6 +8,6 @@ VPN data plane работает на Xray VLESS Reality. Каждое устро
 
 Управляющий узел `vpn.akalmaz.tech` хранит SQLite, обслуживает сайт и Telegram-бота. Дополнительные VPN-edge узлы не запускают приложение, Telegram polling или отдельную базу: на них работают только Xray Reality, локальная Caddy-маскировка и ограниченный helper синхронизации пользователей.
 
-Каждый edge получает отдельный GitHub Environment (`production-edge-2`, `production-edge-3`, …) с одинаковыми именами секретов `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER`, `DEPLOY_SSH_PRIVATE_KEY`, `DEPLOY_SSH_KNOWN_HOSTS`. Workflow `Bootstrap VPN edge` можно повторно запускать без ротации уже созданных Reality-ключей.
+Каждый edge получает отдельный GitHub Environment (`production-edge-2`, `production-edge-3`, …). IP, порт, пользователь, DNS-имя и закреплённый SHA256 fingerprint передаются workflow как публичные параметры; общий repository secret `DEPLOY_SSH_PRIVATE_KEY` используется повторно. Workflow `Bootstrap VPN edge` можно запускать повторно без ротации уже созданных Reality-ключей.
 
 До переключения клиентов новый edge должен пройти bootstrap, HTTPS/443 smoke test и синхронизацию активных UUID. Удалять Xray с управляющего узла разрешается только после успешного клиентского canary через новый основной edge.

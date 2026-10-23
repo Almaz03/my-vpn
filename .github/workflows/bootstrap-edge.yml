@@ -4,10 +4,28 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: GitHub Environment containing this edge's DEPLOY_* secrets
+        description: GitHub Environment used for deployment approvals
         required: true
         type: string
         default: production-edge-2
+      edge_host:
+        description: Public IPv4 of the VPN edge
+        required: true
+        type: string
+      edge_port:
+        description: SSH port
+        required: true
+        type: string
+        default: "22"
+      bootstrap_user:
+        description: Initial sudo-capable SSH user
+        required: true
+        type: string
+        default: root
+      ssh_host_fingerprint:
+        description: Expected SHA256 fingerprint of the SSH ED25519 host key
+        required: true
+        type: string
       edge_sni:
         description: Dedicated DNS name already pointing at the edge (for example tcp2.vpn.akalmaz.tech)
         required: true
@@ -37,10 +55,10 @@ jobs:
       - name: Validate target and configure SSH
         shell: bash
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_HOST: ${{ inputs.edge_host }}
+          DEPLOY_PORT: ${{ inputs.edge_port }}
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          EXPECTED_HOST_FINGERPRINT: ${{ inputs.ssh_host_fingerprint }}
           EDGE_SNI: ${{ inputs.edge_sni }}
         run: |
           set -euo pipefail
@@ -50,12 +68,14 @@ jobs:
           umask 077
           mkdir -p "$HOME/.ssh"
           printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           ssh-keygen -lf "$HOME/.ssh/deploy_key" >/dev/null
-          ssh-keygen -lf "$HOME/.ssh/known_hosts"
-          known_host="$DEPLOY_HOST"
-          [[ "$DEPLOY_PORT" == 22 ]] || known_host="[$DEPLOY_HOST]:$DEPLOY_PORT"
-          ssh-keygen -F "$known_host" -f "$HOME/.ssh/known_hosts" >/dev/null
+          [[ "$EXPECTED_HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+          ssh-keyscan -T 15 -p "$DEPLOY_PORT" -t ed25519 "$DEPLOY_HOST" \
+            > "$HOME/.ssh/known_hosts" 2>/dev/null
+          actual_fingerprint="$(ssh-keygen -lf "$HOME/.ssh/known_hosts" -E sha256 | awk '{print $2}')"
+          printf 'Observed SSH host fingerprint: %s\n' "$actual_fingerprint"
+          [[ "$actual_fingerprint" == "$EXPECTED_HOST_FINGERPRINT" ]]
+          echo 'Pinned SSH host fingerprint verified.'
 
       - name: Build immutable edge bootstrap bundle
         shell: bash
@@ -72,9 +92,9 @@ jobs:
       - name: Install isolated VPN data plane
         shell: bash
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          BOOTSTRAP_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ inputs.edge_host }}
+          DEPLOY_PORT: ${{ inputs.edge_port }}
+          BOOTSTRAP_USER: ${{ inputs.bootstrap_user }}
           EDGE_SNI: ${{ inputs.edge_sni }}
         run: |
           set -euo pipefail
@@ -93,8 +113,8 @@ jobs:
       - name: Verify edge management and public listeners
         shell: bash
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_HOST: ${{ inputs.edge_host }}
+          DEPLOY_PORT: ${{ inputs.edge_port }}
           EDGE_SNI: ${{ inputs.edge_sni }}
         run: |
           set -euo pipefail
