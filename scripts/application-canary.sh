@@ -104,10 +104,14 @@ if jq -e '
     ((http_port++))
     ((http_port < 18300))
   done
-  jq --argjson socks_port "$socks_port" --argjson http_port "$http_port" '
+	  proxy_address="$(jq -r '.outbounds[] | select(.tag == "🇫🇮 Финляндия 🚀") | .settings.vnext[0].address' "$work/subscription.txt")"
+	  if [[ ! -f /etc/my-vpn/edge-controller.env ]]; then
+	    proxy_address=127.0.0.1
+	  fi
+	  jq --argjson socks_port "$socks_port" --argjson http_port "$http_port" --arg proxy_address "$proxy_address" '
     (.inbounds[] | select(.protocol == "socks") | .port) = $socks_port |
     (.inbounds[] | select(.protocol == "http") | .port) = $http_port |
-    (.outbounds[] | select(.tag == "🇫🇮 Финляндия 🚀") | .settings.vnext[0].address) = "127.0.0.1"
+	    (.outbounds[] | select(.tag == "🇫🇮 Финляндия 🚀") | .settings.vnext[0].address) = $proxy_address
   ' "$work/subscription.txt" > "$client_work/config.json"
   chown -R xray:xray "$client_work"
   chmod 0750 "$client_work"
