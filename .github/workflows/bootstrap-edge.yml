@@ -86,6 +86,8 @@ jobs:
           cp scripts/bootstrap-edge-server.sh scripts/edge-user-helper.sh "$bundle/scripts/"
           cp deploy/xray.service deploy/edge.Caddyfile deploy/my-vpn-edge.sudoers "$bundle/deploy/"
           ssh-keygen -y -f "$HOME/.ssh/deploy_key" > "$bundle/deploy-authorized-key.pub"
+          printf 'Authorize this deploy public key on the new edge:\n'
+          cat "$bundle/deploy-authorized-key.pub"
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -C "$bundle" -czf "$RUNNER_TEMP/edge-bootstrap.tar.gz" .
 
