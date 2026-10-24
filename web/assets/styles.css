@@ -197,8 +197,10 @@ input[type="text"]:focus, button:focus-visible, a:focus-visible, summary:focus-v
 .status--busy { color: var(--warning); background: var(--warning-soft); }
 .status--success { color: var(--accent-strong); background: var(--accent-soft); }
 
-.result { position: relative; overflow: hidden; }
-.success-mark { position: absolute; top: 25px; right: 28px; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; color: #fff; background: var(--accent); font-size: 1.4rem; }
+.result { overflow: hidden; }
+.result-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.result-heading > div:first-child { min-width: 0; }
+.success-mark { display: grid; flex: 0 0 42px; place-items: center; width: 42px; height: 42px; border-radius: 50%; color: #fff; background: var(--accent); font-size: 1.4rem; }
 .result > p { color: var(--muted); }
 
 .steps { margin-top: 28px; border-top: 1px solid var(--line); }
