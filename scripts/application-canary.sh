@@ -91,6 +91,18 @@ else
   exit 1
 fi
 
+printf '%s' '{"version":1}' | /usr/local/libexec/my-vpn/reality-helper stats > "$work/traffic-stats.json"
+jq -e '
+  .version == 1 and
+  ([.edges[].id] | sort == ["fi", "lt"]) and
+  all(.edges[];
+    (.stats | type == "array") and
+    all(.stats[];
+      (.name | test("^user>>>device-[0-9a-f]{32}>>>traffic>>>(uplink|downlink)$")) and
+      (.value | type == "number" and . >= 0)))
+' "$work/traffic-stats.json" >/dev/null
+echo "application canary: private dual-edge traffic counters validated"
+
 admin_request POST "/api/v1/admin/devices/$device_id/revoke" > "$work/revoke.json"
 device_id=""
 http_code="$(printf 'url = "http://127.0.0.1:8080%s"\n' "$subscription_path" |
