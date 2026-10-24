@@ -13,8 +13,6 @@ work="$(mktemp -d /var/lib/my-vpn/.application-canary.XXXXXX)"
 chmod 0700 "$work"
 invitation_id=""
 device_id=""
-client_pid=""
-client_work=""
 
 admin_request() {
   local method="$1" path="$2" body_file="${3:-}"
@@ -36,17 +34,10 @@ admin_request() {
 cleanup() {
   status=$?
   trap - EXIT INT TERM
-  if [[ -n "$client_pid" ]]; then
-    kill "$client_pid" >/dev/null 2>&1 || true
-    wait "$client_pid" >/dev/null 2>&1 || true
-  fi
   if [[ -n "$device_id" ]]; then
     admin_request POST "/api/v1/admin/devices/$device_id/revoke" >/dev/null 2>&1 || true
   elif [[ -n "$invitation_id" ]]; then
     admin_request POST "/api/v1/admin/invitations/$invitation_id/revoke" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "$client_work" ]]; then
-    rm -rf "$client_work"
   fi
   rm -rf "$work"
   exit "$status"
@@ -76,64 +67,25 @@ subscription_path="/${subscription#https://vpn.akalmaz.tech/}"
 printf 'url = "http://127.0.0.1:8080%s"\n' "$subscription_path" |
   curl --fail --silent --show-error --config - > "$work/subscription.txt"
 if jq -e '
-	  (.remarks == "Family VPN · LT + FI") and
-  (.dns.queryStrategy == "UseIPv4") and
-	(.dns.tag == "dns_out") and
-  ([.inbounds[]? | select(.protocol == "socks" and .port == 10808)] | length == 1) and
-  ([.outbounds[]? | select((.tag == "lt-reality" or .tag == "fi-reality") and .protocol == "vless")] | length == 2) and
-	([.outbounds[]? | select(.tag == "lt-reality" or .tag == "fi-reality") |
-	  select(.settings.vnext[0].address | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$"))] | length == 2) and
-  ([.outbounds[]? | select(.tag == "direct" and .protocol == "freedom")] | length == 1) and
-  ([.outbounds[]? | select(.tag == "block" and .protocol == "blackhole")] | length == 1) and
-	([.routing.rules[]? | select(.outboundTag == "direct" and (.inboundTag == ["dns_out"]) and (.ip == ["77.88.8.8"]))] | length == 1) and
-	([.routing.rules[]? | select(.balancerTag == "family-balancer" and (.inboundTag == ["dns_out"]))] | length == 1) and
-	([.routing.rules[]? | select(.outboundTag == "dns-out" and .port == 53)] | length == 1) and
-	([.routing.rules[]? | select(.outboundTag == "block" and .network == "udp" and .port == 443)] | length == 1) and
-  ([.routing.rules[]? | select(.balancerTag == "family-balancer" and .network == "tcp,udp")] | length == 1)
+  (."profile-name" == "Family VPN · LT + FI") and
+  (.mode == "rule") and (.ipv6 == false) and (.tun.enable == true) and
+  (.dns.enable == true) and (.dns.ipv6 == false) and (.dns."enhanced-mode" == "fake-ip") and
+  ([.proxies[]? | select(
+    .type == "vless" and .tls == true and .network == "tcp" and .udp == true and
+    .flow == "xtls-rprx-vision" and .port == 443 and
+    (.server | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$")) and
+    (."reality-opts"."public-key" | test("^[A-Za-z0-9_-]{43}$")) and
+    (."reality-opts"."short-id" | test("^[0-9a-f]{16}$"))
+  )] | length == 2) and
+  ([."proxy-groups"[]? | select(
+    .name == "🚀 Автовыбор" and .type == "url-test" and .lazy == false and
+    .proxies == ["🇱🇹 Литва 🚀", "🇫🇮 Финляндия 🚀"]
+  )] | length == 1) and
+  (.rules | index("DOMAIN-SUFFIX,ru,DIRECT") != null) and
+  (.rules | index("DOMAIN-SUFFIX,xn--p1ai,DIRECT") != null) and
+  (.rules[-1] == "MATCH,🚀 Автовыбор")
 ' "$work/subscription.txt" >/dev/null 2>&1; then
-  echo "application canary: full Xray subscription validated"
-
-  client_work="$(mktemp -d /var/lib/xray/.application-canary.XXXXXX)"
-  socks_port=18150
-  while ss -H -ltn "sport = :$socks_port" | grep -q .; do
-    ((socks_port++))
-    ((socks_port < 18200))
-  done
-  http_port=$((socks_port + 50))
-  while ss -H -ltn "sport = :$http_port" | grep -q .; do
-    ((http_port++))
-    ((http_port < 18300))
-  done
-	  jq --argjson socks_port "$socks_port" --argjson http_port "$http_port" '
-    (.inbounds[] | select(.protocol == "socks") | .port) = $socks_port |
-    (.inbounds[] | select(.protocol == "http") | .port) = $http_port
-  ' "$work/subscription.txt" > "$client_work/config.json"
-  chown -R xray:xray "$client_work"
-  chmod 0750 "$client_work"
-  chmod 0600 "$client_work/config.json"
-  runuser -u xray -- /usr/local/bin/xray run -config "$client_work/config.json" \
-    >"$client_work/xray.log" 2>&1 &
-  client_pid=$!
-  ready=false
-  for _ in {1..20}; do
-    if ss -H -ltn "sport = :$socks_port" | grep -q .; then
-      ready=true
-      break
-    fi
-    sleep 0.25
-  done
-  [[ "$ready" == true ]]
-  curl --fail --silent --show-error --max-time 15 \
-    --proxy "socks5h://127.0.0.1:$socks_port" \
-    --output "$client_work/trace.txt" \
-    https://www.cloudflare.com/cdn-cgi/trace
-  grep -Eq '^ip=[0-9a-fA-F:.]+$' "$client_work/trace.txt"
-  kill "$client_pid" >/dev/null 2>&1 || true
-  wait "$client_pid" >/dev/null 2>&1 || true
-  client_pid=""
-  rm -rf "$client_work"
-  client_work=""
-  echo "application canary: full Xray foreign egress passed"
+  echo "application canary: full Clash Mi dual-edge subscription validated"
 else
   echo 'application canary: invalid dual-edge profile' >&2
   exit 1
