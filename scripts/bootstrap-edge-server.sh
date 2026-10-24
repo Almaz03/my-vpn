@@ -65,7 +65,7 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn-edge ]]; then
   public_key="$(sed -n 's/^Password (PublicKey): //p' <<<"$key_output")"
   short_id="$(openssl rand -hex 8)"
   jq -n --arg private_key "$private_key" --arg short_id "$short_id" --arg sni "$edge_sni" '{
-    log:{loglevel:"warning"},api:{tag:"api",services:["HandlerService","StatsService"]},
+    log:{loglevel:"warning"},stats:{},api:{tag:"api",services:["HandlerService","StatsService"]},
     policy:{levels:{"0":{statsUserUplink:true,statsUserDownlink:true}}},
     inbounds:[
       {tag:"my-vpn-reality",listen:"0.0.0.0",port:443,protocol:"vless",settings:{clients:[],decryption:"none"},streamSettings:{network:"raw",security:"reality",realitySettings:{show:false,dest:"127.0.0.1:8444",xver:0,serverNames:[$sni],privateKey:$private_key,shortIds:[$short_id]}}},
@@ -100,6 +100,7 @@ fi
 # loopback-only and records no domains, URLs or DNS requests.
 stats_candidate="$(mktemp --suffix=.json /etc/xray/.stats-config.XXXXXX)"
 jq '
+  .stats = {} |
   .api = {tag:"api",services:["HandlerService","StatsService"]} |
   .policy = ((.policy // {}) * {levels: (((.policy // {}).levels // {}) * {"0": {statsUserUplink:true,statsUserDownlink:true}})})
 ' /etc/xray/config.json > "$stats_candidate"

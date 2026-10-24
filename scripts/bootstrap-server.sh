@@ -213,6 +213,7 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
   [[ "$short_id" =~ ^[0-9a-f]{16}$ ]]
   jq -n --arg private_key "$private_key" --arg short_id "$short_id" '{
     log: {loglevel: "warning"},
+    stats: {},
     api: {tag: "api", services: ["HandlerService", "StatsService"]},
     policy: {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}},
     inbounds: [{
@@ -311,6 +312,7 @@ chmod 0600 /etc/my-vpn/edge.env
 # Public traffic never reaches this listener.
 if ! jq -e '
   .api.tag == "api" and
+  (.stats | type == "object") and
   ((.api.services // []) | index("HandlerService")) and
   ((.api.services // []) | index("StatsService")) and
   .policy.levels["0"].statsUserUplink == true and
@@ -321,6 +323,7 @@ if ! jq -e '
 ' /etc/xray/config.json >/dev/null; then
   cp -a /etc/xray/config.json "/etc/xray/config.json.pre-runtime-api.$(date -u +%Y%m%dT%H%M%SZ)"
   jq '
+    .stats = {} |
     .api = {tag: "api", services: ["HandlerService", "StatsService"]} |
     .policy = ((.policy // {}) * {levels: (((.policy // {}).levels // {}) * {"0": {statsUserUplink: true, statsUserDownlink: true}})}) |
     .inbounds = ([.inbounds[] | select(.tag != "api-in")] + [{
