@@ -15,7 +15,7 @@ Bootstrap ставит локальный литовский edge и запис�
 3. Получить SHA256 fingerprint ED25519 host key через консоль сервера.
 4. Запустить workflow `Bootstrap VPN edge`, указав environment, IP, SSH-порт, пользователя, fingerprint, DNS-имя и подтверждение `BOOTSTRAP-EDGE`.
 5. Запустить `Bootstrap production host`: он проверит fingerprint, установит `edges.json` и выполнит временный provision/config/revoke сразу на LT и FI.
-6. Запустить основной deploy и убедиться, что application canary получил два outbound (`lt-reality`, `fi-reality`) и вышел в Интернет через balancer.
-7. Только после canary удалить старые пользовательские профили и выдать новый профиль OneXray.
+6. Запустить основной deploy и убедиться, что application canary получил два Reality proxy и активную `url-test` группу.
+7. Только после canary удалить старые пользовательские профили и выдать новый профиль Clash Mi.
 
 На edge нет сайта, Telegram-бота и пользовательской базы. Команды `edge-user-helper add DEVICE_ID UUID`, `remove DEVICE_ID` и `metadata` доступны только выделенному deploy-пользователю через фиксированное правило sudo; публичного управляющего API нет.

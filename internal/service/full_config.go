@@ -13,8 +13,7 @@ var fullConfigUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-
 
 const (
 	familyProfileName = "Family VPN · LT + FI"
-	familyProxyTag    = "family-auto"
-	familyBalancerTag = "family-balancer"
+	familyAutoGroup   = "🚀 Автовыбор"
 )
 
 var privateNetworks = []string{
@@ -23,128 +22,128 @@ var privateNetworks = []string{
 	"17.0.0.0/8",
 }
 
-func buildFullXrayConfig(vlessURIs []string) (string, error) {
+type realityClient struct {
+	Server      string
+	Port        int
+	UUID        string
+	ServerName  string
+	PublicKey   string
+	ShortID     string
+	Fingerprint string
+	Flow        string
+}
+
+// buildClashMihomoConfig emits JSON with a YAML content type. JSON is a strict
+// subset of YAML, which keeps generation deterministic while Clash Mi/Mihomo
+// still receives a native full profile rather than a lossy list of links.
+func buildClashMihomoConfig(vlessURIs []string) (string, error) {
 	if len(vlessURIs) != 2 {
 		return "", errors.New("exactly two VLESS client configurations are required")
 	}
-	ltOutbound, err := buildRealityOutbound(vlessURIs[0], "lt-reality")
+	ltProxy, err := buildMihomoRealityProxy(vlessURIs[0], "🇱🇹 Литва 🚀")
 	if err != nil {
 		return "", err
 	}
-	fiOutbound, err := buildRealityOutbound(vlessURIs[1], "fi-reality")
+	fiProxy, err := buildMihomoRealityProxy(vlessURIs[1], "🇫🇮 Финляндия 🚀")
 	if err != nil {
 		return "", err
 	}
 
-	directDomains := append([]string(nil), familyDirectDomains...)
+	rules := make([]string, 0, len(privateNetworks)+len(familyDirectDomains)+1)
+	for _, network := range privateNetworks {
+		rules = append(rules, "IP-CIDR,"+network+",DIRECT,no-resolve")
+	}
+	for _, domainRule := range familyDirectDomains {
+		domain := strings.TrimPrefix(domainRule, "domain:")
+		if domain == domainRule || domain == "" || containsUnsafeConfigText(domain) {
+			return "", errors.New("invalid direct domain rule")
+		}
+		rules = append(rules, "DOMAIN-SUFFIX,"+domain+",DIRECT")
+	}
+	rules = append(rules, "MATCH,"+familyAutoGroup)
+
 	config := map[string]any{
-		"remarks": familyProfileName,
-		"log":     map[string]any{"loglevel": "warning"},
-		"observatory": map[string]any{
-			"subjectSelector": []string{"lt-reality", "fi-reality"},
-			"probeURL":        "https://www.gstatic.com/generate_204", "probeInterval": "30s",
+		"profile-name":              familyProfileName,
+		"mode":                      "rule",
+		"log-level":                 "warning",
+		"ipv6":                      false,
+		"allow-lan":                 false,
+		"unified-delay":             true,
+		"tcp-concurrent":            true,
+		"global-client-fingerprint": "chrome",
+		"profile": map[string]any{
+			"store-selected": true,
+			"store-fake-ip":  true,
+		},
+		"tun": map[string]any{
+			"enable": true, "stack": "mixed", "auto-route": true,
+			"auto-detect-interface": true, "strict-route": false,
+			"dns-hijack": []string{"any:53"},
 		},
 		"dns": map[string]any{
-			"queryStrategy": "UseIPv4",
-			"servers": []any{
-				"8.8.8.8",
-				"1.1.1.1",
-				map[string]any{"address": "77.88.8.8", "domains": directDomains},
-			},
-			"tag": "dns_out",
+			"enable": true, "ipv6": false, "enhanced-mode": "fake-ip",
+			"fake-ip-range":           "198.18.0.1/16",
+			"fake-ip-filter":          []string{"*.lan", "+.local", "localhost", "+.push.apple.com"},
+			"default-nameserver":      []string{"1.1.1.1", "8.8.8.8"},
+			"nameserver":              []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"},
+			"proxy-server-nameserver": []string{"1.1.1.1", "8.8.8.8"},
 		},
-		"inbounds": []any{
-			map[string]any{
-				"tag": "socks-in", "protocol": "socks", "listen": "127.0.0.1", "port": 10808,
-				"settings": map[string]any{"auth": "noauth", "udp": true},
-				"sniffing": map[string]any{
-					"enabled": true, "destOverride": []string{"http", "tls", "quic"},
-					"metadataOnly": false, "routeOnly": false,
-				},
-			},
-			map[string]any{
-				"tag": "http-in", "protocol": "http", "listen": "127.0.0.1", "port": 10809,
-				"settings": map[string]any{"auth": "noauth"},
-				"sniffing": map[string]any{
-					"enabled": true, "destOverride": []string{"http", "tls", "quic"},
-				},
-			},
-		},
-		"outbounds": []any{
-			ltOutbound, fiOutbound,
-			map[string]any{
-				"tag": "direct", "protocol": "freedom", "settings": map[string]any{},
-				"streamSettings": map[string]any{"sockopt": map[string]any{"domainStrategy": "ForceIPv4"}},
-			},
-			map[string]any{"tag": "block", "protocol": "blackhole", "settings": map[string]any{}},
-			map[string]any{"tag": "dns-out", "protocol": "dns"},
-		},
-		"routing": map[string]any{
-			"domainStrategy": "IPIfNonMatch",
-			"balancers": []any{map[string]any{
-				"tag": familyBalancerTag, "selector": []string{"lt-reality", "fi-reality"},
-				"strategy": map[string]any{"type": "leastPing"},
-			}},
-			"rules": []any{
-				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "ip": []string{"77.88.8.8"}, "outboundTag": "direct"},
-				map[string]any{"type": "field", "inboundTag": []string{"dns_out"}, "balancerTag": familyBalancerTag},
-				map[string]any{"type": "field", "port": 53, "outboundTag": "dns-out"},
-				map[string]any{"type": "field", "ip": privateNetworks, "outboundTag": "direct"},
-				map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
-				map[string]any{"type": "field", "network": "udp", "port": 443, "outboundTag": "block"},
-				map[string]any{"type": "field", "domain": directDomains, "outboundTag": "direct"},
-				map[string]any{"type": "field", "network": "tcp,udp", "balancerTag": familyBalancerTag},
-			},
-		},
+		"proxies": []any{ltProxy, fiProxy},
+		"proxy-groups": []any{map[string]any{
+			"name": familyAutoGroup, "type": "url-test",
+			"proxies": []string{"🇱🇹 Литва 🚀", "🇫🇮 Финляндия 🚀"},
+			"url":     "https://www.gstatic.com/generate_204", "interval": 30,
+			"tolerance": 50, "lazy": false,
+		}},
+		"rules": rules,
 	}
 	body, err := json.Marshal(config)
 	if err != nil {
-		return "", errors.New("encode full Xray configuration")
+		return "", errors.New("encode Clash Mi configuration")
 	}
 	return string(body) + "\n", nil
 }
 
-func buildRealityOutbound(vlessURI, tag string) (map[string]any, error) {
+func buildMihomoRealityProxy(vlessURI, name string) (map[string]any, error) {
+	client, err := parseRealityClient(vlessURI)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"name": name, "type": "vless", "server": client.Server, "port": client.Port,
+		"uuid": client.UUID, "network": "tcp", "tls": true, "udp": true,
+		"flow": client.Flow, "servername": client.ServerName,
+		"client-fingerprint": client.Fingerprint, "packet-encoding": "xudp",
+		"reality-opts": map[string]any{
+			"public-key": client.PublicKey, "short-id": client.ShortID,
+		},
+	}, nil
+}
+
+func parseRealityClient(vlessURI string) (realityClient, error) {
 	parsed, err := url.Parse(vlessURI)
 	if err != nil || parsed.Scheme != "vless" || parsed.User == nil || parsed.Hostname() == "" {
-		return nil, errors.New("invalid VLESS client configuration")
+		return realityClient{}, errors.New("invalid VLESS client configuration")
 	}
 	uuid := parsed.User.Username()
 	port, err := strconv.Atoi(parsed.Port())
 	if err != nil || port < 1 || port > 65535 || !fullConfigUUIDPattern.MatchString(uuid) {
-		return nil, errors.New("invalid VLESS client configuration")
+		return realityClient{}, errors.New("invalid VLESS client configuration")
 	}
 	query := parsed.Query()
-	serverName := query.Get("sni")
-	publicKey := query.Get("pbk")
-	shortID := query.Get("sid")
-	fingerprint := query.Get("fp")
-	flow := query.Get("flow")
+	client := realityClient{
+		Server: parsed.Hostname(), Port: port, UUID: uuid,
+		ServerName: query.Get("sni"), PublicKey: query.Get("pbk"),
+		ShortID: query.Get("sid"), Fingerprint: query.Get("fp"), Flow: query.Get("flow"),
+	}
 	transport := query.Get("type")
 	if query.Get("security") != "reality" || query.Get("encryption") != "none" ||
-		serverName == "" || publicKey == "" || shortID == "" || fingerprint == "" ||
-		flow != "xtls-rprx-vision" || (transport != "tcp" && transport != "raw") ||
-		containsUnsafeConfigText(serverName, publicKey, shortID, fingerprint) {
-		return nil, errors.New("invalid VLESS client configuration")
+		client.ServerName == "" || client.PublicKey == "" || client.ShortID == "" || client.Fingerprint == "" ||
+		client.Flow != "xtls-rprx-vision" || (transport != "tcp" && transport != "raw") ||
+		containsUnsafeConfigText(client.Server, client.ServerName, client.PublicKey, client.ShortID, client.Fingerprint) {
+		return realityClient{}, errors.New("invalid VLESS client configuration")
 	}
-
-	return map[string]any{
-		"tag": tag, "protocol": "vless",
-		"settings": map[string]any{"vnext": []any{map[string]any{
-			"address": parsed.Hostname(), "port": port,
-			"users": []any{map[string]any{"id": uuid, "encryption": "none", "flow": flow}},
-		}}},
-		"streamSettings": map[string]any{
-			"network": "tcp", "security": "reality",
-			"tcpSettings": map[string]any{"header": map[string]any{"type": "none"}},
-			"realitySettings": map[string]any{
-				"show":        false,
-				"fingerprint": fingerprint, "serverName": serverName,
-				"publicKey": publicKey, "shortId": shortID, "spiderX": "/",
-			},
-		},
-		"mux": map[string]any{"enabled": false},
-	}, nil
+	return client, nil
 }
 
 func containsUnsafeConfigText(values ...string) bool {

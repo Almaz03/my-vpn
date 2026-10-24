@@ -2,92 +2,119 @@ package service
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestFullXrayConfigUsesTCPRealityTransport(t *testing.T) {
-	body, err := buildFullXrayConfig(testDualURIs())
+type testMihomoConfig struct {
+	ProfileName string `json:"profile-name"`
+	IPv6        bool   `json:"ipv6"`
+	Tun         struct {
+		Enable bool `json:"enable"`
+	} `json:"tun"`
+	DNS struct {
+		Enable       bool   `json:"enable"`
+		IPv6         bool   `json:"ipv6"`
+		EnhancedMode string `json:"enhanced-mode"`
+	} `json:"dns"`
+	Proxies []struct {
+		Name              string `json:"name"`
+		Type              string `json:"type"`
+		Server            string `json:"server"`
+		Port              int    `json:"port"`
+		UUID              string `json:"uuid"`
+		Flow              string `json:"flow"`
+		TLS               bool   `json:"tls"`
+		Network           string `json:"network"`
+		ClientFingerprint string `json:"client-fingerprint"`
+		RealityOptions    struct {
+			PublicKey string `json:"public-key"`
+			ShortID   string `json:"short-id"`
+		} `json:"reality-opts"`
+	} `json:"proxies"`
+	ProxyGroups []struct {
+		Name      string   `json:"name"`
+		Type      string   `json:"type"`
+		Proxies   []string `json:"proxies"`
+		URL       string   `json:"url"`
+		Interval  int      `json:"interval"`
+		Tolerance int      `json:"tolerance"`
+		Lazy      bool     `json:"lazy"`
+	} `json:"proxy-groups"`
+	Rules []string `json:"rules"`
+}
+
+func parseTestMihomoConfig(t *testing.T) testMihomoConfig {
+	t.Helper()
+	body, err := buildClashMihomoConfig(testDualURIs())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var config struct {
-		Remarks   string `json:"remarks"`
-		Outbounds []struct {
-			Tag            string `json:"tag"`
-			StreamSettings struct {
-				Network         string `json:"network"`
-				Security        string `json:"security"`
-				RealitySettings struct {
-					Show    bool   `json:"show"`
-					SpiderX string `json:"spiderX"`
-				} `json:"realitySettings"`
-			} `json:"streamSettings"`
-		} `json:"outbounds"`
-	}
+	var config testMihomoConfig
 	if err := json.Unmarshal([]byte(body), &config); err != nil {
 		t.Fatal(err)
 	}
-	if config.Remarks != familyProfileName {
-		t.Fatalf("unexpected visible profile name %q", config.Remarks)
+	return config
+}
+
+func TestClashMihomoConfigUsesDualRealityAndAutomaticSelection(t *testing.T) {
+	config := parseTestMihomoConfig(t)
+	if config.ProfileName != familyProfileName || len(config.Proxies) != 2 || len(config.ProxyGroups) != 1 {
+		t.Fatalf("unexpected profile shape: %#v", config)
 	}
-	for _, outbound := range config.Outbounds {
-		if outbound.Tag != "fi-reality" {
-			continue
+	for _, proxy := range config.Proxies {
+		if proxy.Type != "vless" || proxy.Port != 443 || !proxy.TLS || proxy.Network != "tcp" ||
+			proxy.Flow != "xtls-rprx-vision" || proxy.ClientFingerprint != "chrome" ||
+			proxy.RealityOptions.PublicKey == "" || proxy.RealityOptions.ShortID == "" {
+			t.Fatalf("unexpected Reality proxy: %#v", proxy)
 		}
-		if outbound.StreamSettings.Network != "tcp" || outbound.StreamSettings.Security != "reality" ||
-			outbound.StreamSettings.RealitySettings.Show || outbound.StreamSettings.RealitySettings.SpiderX != "/" {
-			t.Fatalf("unexpected Reality stream settings: %#v", outbound.StreamSettings)
-		}
-		return
 	}
-	t.Fatal("Finland outbound not found")
-}
-
-func TestFullXrayConfigForcesQUICFallbackToTCP(t *testing.T) {
-	body, err := buildFullXrayConfig(testDualURIs())
-	if err != nil {
-		t.Fatal(err)
+	group := config.ProxyGroups[0]
+	if group.Name != familyAutoGroup || group.Type != "url-test" || group.Lazy || group.Interval != 30 ||
+		group.Tolerance != 50 || len(group.Proxies) != 2 || group.URL != "https://www.gstatic.com/generate_204" {
+		t.Fatalf("automatic group is not ready by default: %#v", group)
 	}
-	if !strings.Contains(body, `"network":"udp","outboundTag":"block","port":443`) {
-		t.Fatal("expected UDP/443 to be blocked so HTTP/3 falls back to TCP")
+	if got := config.Rules[len(config.Rules)-1]; got != "MATCH,"+familyAutoGroup {
+		t.Fatalf("default traffic does not use automatic group: %q", got)
 	}
 }
 
-func TestFullXrayConfigDoesNotDependOnClientGeodata(t *testing.T) {
-	body, err := buildFullXrayConfig(testDualURIs())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(body, "geosite:") || strings.Contains(body, "geoip:") {
-		t.Fatal("client config must not depend on possibly stale geosite.dat or geoip.dat assets")
-	}
-	if !strings.Contains(body, `"domain:ru"`) || !strings.Contains(body, `"balancerTag":"family-balancer"`) {
-		t.Fatal("expected self-contained RU direct rule and proxy fallback")
-	}
-	if len(familyDirectDomains) < 230 {
-		t.Fatalf("RU-direct allowlist unexpectedly shrank to %d entries", len(familyDirectDomains))
-	}
-	if !strings.Contains(body, `"domain:2gis.com"`) || !strings.Contains(body, `"domain:ozon.com"`) ||
-		!strings.Contains(body, `"domain:yandex.com"`) || !strings.Contains(body, `"17.0.0.0/8"`) {
-		t.Fatal("expected extended known-good direct routing rules")
-	}
-}
-
-func TestFullXrayConfigRoutesDNSBypassAndProxyExplicitly(t *testing.T) {
-	body, err := buildFullXrayConfig(testDualURIs())
-	if err != nil {
-		t.Fatal(err)
+func TestClashMihomoConfigIsSelfContainedAndRoutesRussianSitesDirect(t *testing.T) {
+	config := parseTestMihomoConfig(t)
+	if !config.Tun.Enable || !config.DNS.Enable || config.IPv6 || config.DNS.IPv6 || config.DNS.EnhancedMode != "fake-ip" {
+		t.Fatalf("unexpected tunnel or DNS config: %#v", config)
 	}
 	for _, expected := range []string{
-		`"tag":"dns_out"`,
-		`"inboundTag":["dns_out"],"ip":["77.88.8.8"],"outboundTag":"direct"`,
-		`"balancerTag":"family-balancer","inboundTag":["dns_out"]`,
-		`"outboundTag":"dns-out","port":53`,
+		"IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+		"IP-CIDR,17.0.0.0/8,DIRECT,no-resolve",
+		"DOMAIN-SUFFIX,ru,DIRECT",
+		"DOMAIN-SUFFIX,xn--p1ai,DIRECT",
+		"DOMAIN-SUFFIX,2gis.com,DIRECT",
+		"DOMAIN-SUFFIX,ozon.com,DIRECT",
+		"DOMAIN-SUFFIX,yandex.com,DIRECT",
 	} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("missing explicit DNS route %q", expected)
+		if !slices.Contains(config.Rules, expected) {
+			t.Fatalf("missing direct rule %q", expected)
 		}
+	}
+	if len(familyDirectDomains) < 230 || len(config.Rules) < len(familyDirectDomains) {
+		t.Fatalf("RU-direct allowlist unexpectedly shrank: domains=%d rules=%d", len(familyDirectDomains), len(config.Rules))
+	}
+	joined := strings.Join(config.Rules, "\n")
+	if strings.Contains(joined, "GEOSITE") || strings.Contains(joined, "GEOIP") {
+		t.Fatal("client config must not depend on separately downloaded geodata")
+	}
+}
+
+func TestClashMihomoConfigRejectsMalformedEdges(t *testing.T) {
+	bad := testDualURIs()
+	bad[1] = strings.Replace(bad[1], "security=reality", "security=none", 1)
+	if _, err := buildClashMihomoConfig(bad); err == nil {
+		t.Fatal("malformed Reality edge was accepted")
+	}
+	if _, err := buildClashMihomoConfig(testDualURIs()[:1]); err == nil {
+		t.Fatal("single-edge profile was accepted")
 	}
 }
 

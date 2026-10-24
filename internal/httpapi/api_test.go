@@ -147,8 +147,8 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 		t.Fatalf("activate status=%d body=%s", response.Code, response.Body.String())
 	}
 	deepLink, err := url.Parse(activation.DeepLink)
-	if err != nil || deepLink.Scheme != "onexray" || deepLink.Host != "onexray.com" || deepLink.Path != "/sub/add" ||
-		deepLink.Query().Get("panel") != "generic" || deepLink.Query().Get("mode") != "providerManaged" {
+	if err != nil || deepLink.Scheme != "clashmi" || deepLink.Host != "install-config" ||
+		deepLink.Query().Get("name") != "Family VPN" || deepLink.Query().Get("overwrite") != "true" {
 		t.Fatalf("unsafe deep link=%q", activation.DeepLink)
 	}
 	if !strings.HasPrefix(activation.QRCode, "https://vpn.example.test/s/") || !strings.HasSuffix(activation.QRCode, "/qr") {
@@ -162,16 +162,16 @@ func TestRealityActivationUsesOpaqueSubscriptionWithSecureHeaders(t *testing.T) 
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, subscriptionPath, nil))
 	var fullConfig struct {
-		Remarks   string `json:"remarks"`
-		Inbounds  []any  `json:"inbounds"`
-		Outbounds []any  `json:"outbounds"`
+		ProfileName string `json:"profile-name"`
+		Proxies     []any  `json:"proxies"`
+		ProxyGroups []any  `json:"proxy-groups"`
 	}
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &fullConfig) != nil ||
-		fullConfig.Remarks != "Family VPN · LT + FI" || len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 5 {
-		t.Fatalf("subscription status=%d is not a full Xray configuration", response.Code)
+		fullConfig.ProfileName != "Family VPN · LT + FI" || len(fullConfig.Proxies) != 2 || len(fullConfig.ProxyGroups) != 1 {
+		t.Fatalf("subscription status=%d is not a full Mihomo configuration", response.Code)
 	}
 	if response.Header().Get("Cache-Control") != "no-store, private, max-age=0" ||
-		response.Header().Get("Content-Type") != "application/json; charset=utf-8" ||
+		response.Header().Get("Content-Type") != "text/yaml; charset=utf-8" ||
 		response.Header().Get("Profile-Update-Interval") != "1" ||
 		response.Header().Get("Autorouting") != "" ||
 		response.Header().Get("Routing-Geo-Update-Interval") != "" ||

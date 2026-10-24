@@ -284,7 +284,7 @@ func (s *Service) Activate(ctx context.Context, code, platform, requestedDeviceN
 	activation.Device.State = result.State
 	if result.State == "active" {
 		subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + subscriptionToken}).String()
-		activation.ClientDeepLink = oneXrayDeepLink(subscriptionURL)
+		activation.ClientDeepLink = clashMiDeepLink(subscriptionURL)
 		activation.ConfigDownloadURL = subscriptionURL + "?download=1"
 		activation.QRCodeURL = subscriptionURL + "/qr"
 	}
@@ -323,11 +323,11 @@ func (s *Service) Subscription(ctx context.Context, token string) (SubscriptionP
 	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
-	body, err := buildFullXrayConfig(client.VLESSURIs)
+	body, err := buildClashMihomoConfig(client.VLESSURIs)
 	if err != nil {
 		return SubscriptionPayload{}, ErrProvisioning
 	}
-	return SubscriptionPayload{Body: body, ContentType: "application/json; charset=utf-8", ExpiresAt: subscription.ExpiresAt}, nil
+	return SubscriptionPayload{Body: body, ContentType: "text/yaml; charset=utf-8", ExpiresAt: subscription.ExpiresAt}, nil
 }
 
 func (s *Service) RoutingProfileURL() string {
@@ -336,12 +336,15 @@ func (s *Service) RoutingProfileURL() string {
 
 func (s *Service) SubscriptionDeepLink(token string) string {
 	subscriptionURL := s.baseURL.ResolveReference(&url.URL{Path: "/s/" + token}).String()
-	return oneXrayDeepLink(subscriptionURL)
+	return clashMiDeepLink(subscriptionURL)
 }
 
-func oneXrayDeepLink(subscriptionURL string) string {
-	return "onexray://onexray.com/sub/add?url=" + url.QueryEscape(subscriptionURL) +
-		"&panel=generic&mode=providerManaged#Family%20VPN"
+func clashMiDeepLink(subscriptionURL string) string {
+	query := url.Values{}
+	query.Set("url", subscriptionURL)
+	query.Set("name", "Family VPN")
+	query.Set("overwrite", "true")
+	return "clashmi://install-config?" + query.Encode()
 }
 
 func (s *Service) RoutingProfile() RoutingProfile {

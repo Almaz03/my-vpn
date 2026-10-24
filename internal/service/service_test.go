@@ -18,12 +18,12 @@ import (
 
 type failingProvisioner struct{}
 
-func subscriptionFromOneXrayDeepLink(t *testing.T, deepLink string) (*url.URL, string) {
+func subscriptionFromClashMiDeepLink(t *testing.T, deepLink string) (*url.URL, string) {
 	t.Helper()
 	link, err := url.Parse(deepLink)
-	if err != nil || link.Scheme != "onexray" || link.Host != "onexray.com" || link.Path != "/sub/add" ||
-		link.Query().Get("panel") != "generic" || link.Query().Get("mode") != "providerManaged" {
-		t.Fatalf("invalid OneXray deep link: %q err=%v", deepLink, err)
+	if err != nil || link.Scheme != "clashmi" || link.Host != "install-config" ||
+		link.Query().Get("name") != "Family VPN" || link.Query().Get("overwrite") != "true" {
+		t.Fatalf("invalid Clash Mi deep link: %q err=%v", deepLink, err)
 	}
 	subscription, err := url.Parse(link.Query().Get("url"))
 	if err != nil || subscription.Scheme != "https" || subscription.Host == "" {
@@ -227,25 +227,23 @@ func TestOpaqueSubscriptionIsHMACOnlyAndRevokedWithDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(activation.ClientDeepLink, "onexray://onexray.com/sub/add?url=") || strings.Contains(activation.ClientDeepLink, "vless://") {
+	if !strings.HasPrefix(activation.ClientDeepLink, "clashmi://install-config?") || strings.Contains(activation.ClientDeepLink, "vless://") {
 		t.Fatalf("unsafe activation deep link: %q", activation.ClientDeepLink)
 	}
-	_, token := subscriptionFromOneXrayDeepLink(t, activation.ClientDeepLink)
+	_, token := subscriptionFromClashMiDeepLink(t, activation.ClientDeepLink)
 	payload, err := application.Subscription(context.Background(), token)
-	if err != nil || payload.ContentType != "application/json; charset=utf-8" {
+	if err != nil || payload.ContentType != "text/yaml; charset=utf-8" {
 		t.Fatalf("subscription err=%v content-type=%q", err, payload.ContentType)
 	}
 	var fullConfig struct {
-		Remarks   string `json:"remarks"`
-		Inbounds  []any  `json:"inbounds"`
-		Outbounds []any  `json:"outbounds"`
-		Routing   struct {
-			Rules []any `json:"rules"`
-		} `json:"routing"`
+		ProfileName string `json:"profile-name"`
+		Proxies     []any  `json:"proxies"`
+		ProxyGroups []any  `json:"proxy-groups"`
+		Rules       []any  `json:"rules"`
 	}
-	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.Remarks != "Family VPN · LT + FI" ||
-		len(fullConfig.Inbounds) < 2 || len(fullConfig.Outbounds) < 5 || len(fullConfig.Routing.Rules) < 1 {
-		t.Fatal("subscription is not a complete Family VPN Xray configuration")
+	if json.Unmarshal([]byte(payload.Body), &fullConfig) != nil || fullConfig.ProfileName != "Family VPN · LT + FI" ||
+		len(fullConfig.Proxies) != 2 || len(fullConfig.ProxyGroups) != 1 || len(fullConfig.Rules) < 1 {
+		t.Fatal("subscription is not a complete Family VPN Mihomo configuration")
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -301,8 +299,8 @@ func TestSeparateClientsHaveUniqueSubscriptionsAndIndependentRevoke(t *testing.T
 	if activations[0].ClientDeepLink == activations[1].ClientDeepLink || activations[0].Device.ID == activations[1].Device.ID {
 		t.Fatal("devices did not receive unique identities and subscriptions")
 	}
-	_, firstToken := subscriptionFromOneXrayDeepLink(t, activations[0].ClientDeepLink)
-	_, secondToken := subscriptionFromOneXrayDeepLink(t, activations[1].ClientDeepLink)
+	_, firstToken := subscriptionFromClashMiDeepLink(t, activations[0].ClientDeepLink)
+	_, secondToken := subscriptionFromClashMiDeepLink(t, activations[1].ClientDeepLink)
 	if _, err := application.Revoke(context.Background(), activations[0].Device.ID); err != nil {
 		t.Fatal(err)
 	}

@@ -222,7 +222,7 @@ func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Profile-Update-Interval", "1")
 	w.Header().Set("Hide-Url", "1")
 	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", `attachment; filename="family-vpn.json"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="family-vpn.yaml"`)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, payload.Body)

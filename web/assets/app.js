@@ -10,19 +10,19 @@
   };
 
   const PLATFORM_HINTS = {
-    android: 'Установите OneXray из Google Play и разрешите VPN-подключение.',
-    ios: 'Установите OneXray из российского App Store, затем подтвердите добавление VPN-конфигурации.',
-    windows: 'Установите OneXray из Microsoft Store.',
-    macos: 'Установите OneXray из App Store.',
-    linux: 'Установите официальный пакет OneXray для Linux.'
+    android: 'Установите Clash Mi с официальной страницы загрузки и разрешите VPN-подключение.',
+    ios: 'Установите Clash Mi из российского App Store, затем подтвердите добавление VPN-конфигурации.',
+    windows: 'Установите Clash Mi с официальной страницы загрузки.',
+    macos: 'Установите Clash Mi с официальной страницы загрузки.',
+    linux: 'Установите официальный пакет Clash Mi для Linux.'
   };
 
   const PLATFORM_CLIENTS = {
-    ios: {name: 'OneXray', url: 'https://apps.apple.com/ru/app/onexray/id6745748773', label: 'Открыть в App Store'},
-    android: {name: 'OneXray', url: 'https://play.google.com/store/apps/details?id=net.yuandev.onexray', label: 'Открыть в Google Play'},
-    windows: {name: 'OneXray', url: 'https://apps.microsoft.com/detail/9NJ0MVHW215D', label: 'Открыть в Microsoft Store'},
-    macos: {name: 'OneXray', url: 'https://apps.apple.com/ru/app/onexray/id6745748773', label: 'Открыть в App Store'},
-    linux: {name: 'OneXray', url: 'https://github.com/YuanDevTeam/OneXray/releases/latest/download/OneXray-linux-x86_64.deb', label: 'Скачать для Linux'}
+    ios: {name: 'Clash Mi', url: 'https://apps.apple.com/ru/app/clash-mi/id6744321968', label: 'Открыть в App Store'},
+    android: {name: 'Clash Mi', url: 'https://clashmi.app/download', label: 'Скачать для Android'},
+    windows: {name: 'Clash Mi', url: 'https://clashmi.app/download', label: 'Скачать для Windows'},
+    macos: {name: 'Clash Mi', url: 'https://clashmi.app/download', label: 'Скачать для macOS'},
+    linux: {name: 'Clash Mi', url: 'https://clashmi.app/download', label: 'Скачать для Linux'}
   };
 
   const form = document.querySelector('#activation-form');
@@ -190,7 +190,7 @@
     window.location.assign(deepLink);
     window.setTimeout(() => {
       document.removeEventListener('visibilitychange', onVisibility);
-      if (!appOpened) importHint.textContent = 'Ссылка уже скопирована. В OneXray добавьте HTTPS-подписку и вставьте её.';
+      if (!appOpened) importHint.textContent = 'Ссылка уже скопирована. В Clash Mi нажмите «+» → добавить профиль по URL и вставьте её.';
     }, 1200);
   });
 
@@ -462,9 +462,9 @@
     if (typeof value !== 'string' || value.length > 4096) return '';
     try {
       const link = new URL(value);
-      if (link.protocol !== 'onexray:' || link.hostname !== 'onexray.com' || link.pathname !== '/sub/add') return '';
-      if ([...link.searchParams.keys()].some((key) => !['url', 'panel', 'mode'].includes(key))) return '';
-      if (link.searchParams.get('panel') !== 'generic' || link.searchParams.get('mode') !== 'providerManaged') return '';
+      if (link.protocol !== 'clashmi:' || link.hostname !== 'install-config') return '';
+      if ([...link.searchParams.keys()].some((key) => !['url', 'name', 'overwrite'].includes(key))) return '';
+      if (link.searchParams.get('name') !== 'Family VPN' || link.searchParams.get('overwrite') !== 'true') return '';
       const subscription = new URL(link.searchParams.get('url') || '');
       if (subscription.origin !== window.location.origin || !/^\/s\/[A-Za-z0-9_-]{43}$/.test(subscription.pathname)) return '';
       return value;
