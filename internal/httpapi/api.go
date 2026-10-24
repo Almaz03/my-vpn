@@ -40,7 +40,7 @@ type AccessRequestNotifier interface {
 func New(service *service.Service, database *store.Store, adminToken, webRoot string, inviteTTL time.Duration) *API {
 	return &API{
 		service: service, store: database, adminHash: sha256.Sum256([]byte(adminToken)),
-		inviteTTL: inviteTTL, webRoot: webRoot, startedAt: time.Now(), pollLimit: newIPWindowLimiter(time.Minute, 40, 300),
+		inviteTTL: inviteTTL, webRoot: webRoot, startedAt: time.Now(), pollLimit: newIPWindowLimiter(time.Minute, 60, 3000),
 	}
 }
 
@@ -109,11 +109,6 @@ func (a *API) createAccessRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) accessRequestStatus(w http.ResponseWriter, r *http.Request) {
-	if !a.pollLimit.Allow(clientIP(r), time.Now()) {
-		w.Header().Set("Retry-After", "60")
-		writeError(w, http.StatusTooManyRequests, "Слишком много проверок. Подождите минуту.")
-		return
-	}
 	var input struct {
 		Token string `json:"request_token"`
 	}
@@ -121,7 +116,13 @@ func (a *API) accessRequestStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Некорректный запрос.")
 		return
 	}
-	request, err := a.service.AccessRequestStatus(r.Context(), strings.TrimSpace(input.Token))
+	token := strings.TrimSpace(input.Token)
+	if !a.pollLimit.Allow(token, time.Now()) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "Слишком много проверок. Подождите минуту.")
+		return
+	}
+	request, err := a.service.AccessRequestStatus(r.Context(), token)
 	if errors.Is(err, store.ErrAccessRequestNotFound) {
 		writeError(w, http.StatusNotFound, "Запрос не найден или истёк.")
 		return

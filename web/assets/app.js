@@ -347,7 +347,7 @@
   function requestError(status, data) {
     if (typeof data.error === 'string' && data.error.length <= 180) return data.error;
     if (status === 409) return 'Для этого имени уже зарегистрировано устройство.';
-    if (status === 429) return 'Слишком много запросов. Повторите через час.';
+    if (status === 429) return 'Слишком много запросов. Немного подождите и повторите.';
     if (status >= 500) return 'Сервис временно недоступен. Повторите позже.';
     return 'Проверьте имя и название устройства.';
   }

@@ -35,6 +35,11 @@ var (
 	ErrClientDeviceLimit       = errors.New("client already has an active device")
 )
 
+const (
+	accessRequestsPerIPPerHour  = 20
+	accessRequestsGlobalPerHour = 200
+)
+
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
@@ -242,7 +247,7 @@ func (s *Store) CreateAccessRequest(ctx context.Context, tokenHMAC []byte, relat
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM access_requests WHERE created_at >= ?`, cutoff).Scan(&global); err != nil {
 		return AccessRequest{}, err
 	}
-	if perIP >= 3 || global >= 30 {
+	if perIP >= accessRequestsPerIPPerHour || global >= accessRequestsGlobalPerHour {
 		return AccessRequest{}, ErrAccessRequestLimit
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO access_requests

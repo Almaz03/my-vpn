@@ -111,6 +111,30 @@ func TestActivationBackoffStartsAtOneSecond(t *testing.T) {
 	}
 }
 
+func TestAccessRequestLimitAllowsSharedHouseholdIP(t *testing.T) {
+	database := testStore(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	database.now = func() time.Time { return now }
+
+	for index := 0; index < accessRequestsPerIPPerHour; index++ {
+		tokenHMAC := bytes.Repeat([]byte{byte(index + 1)}, 32)
+		name := "Человек " + string(rune('A'+index))
+		if _, err := database.CreateAccessRequest(context.Background(), tokenHMAC, name, "Устройство", "ios", "shared-ip", now.Add(2*time.Hour)); err != nil {
+			t.Fatalf("shared IP request %d: %v", index+1, err)
+		}
+	}
+
+	_, err := database.CreateAccessRequest(context.Background(), bytes.Repeat([]byte{250}, 32), "Лишний", "Устройство", "ios", "shared-ip", now.Add(2*time.Hour))
+	if !errors.Is(err, ErrAccessRequestLimit) {
+		t.Fatalf("request above shared IP limit error = %v", err)
+	}
+
+	now = now.Add(time.Hour + time.Second)
+	if _, err := database.CreateAccessRequest(context.Background(), bytes.Repeat([]byte{251}, 32), "После окна", "Устройство", "ios", "shared-ip", now.Add(2*time.Hour)); err != nil {
+		t.Fatalf("request after window: %v", err)
+	}
+}
+
 func TestRevokePendingDoesNotSetRevokedAtAndCanRetry(t *testing.T) {
 	database := testStore(t)
 	hash := bytes.Repeat([]byte{6}, 32)
