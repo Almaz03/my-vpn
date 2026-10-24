@@ -141,6 +141,19 @@ client_config() {
   jq -n --argjson uris "$uris" '{version:1,vless_uris:$uris}'
 }
 
+traffic_stats() {
+  local edge edge_id response edges='[]'
+  while IFS= read -r edge; do
+    edge_id="$(jq -r '.id' <<<"$edge")"
+    response="$(edge_call "$edge" stats)" || fail "edge statistics unavailable"
+    jq -e 'type == "array" and all(.[];
+      (.name | test("^user>>>device-[0-9a-f]{32}>>>traffic>>>(uplink|downlink)$")) and
+      (.value | type == "number" and . >= 0))' <<<"$response" >/dev/null || fail "invalid edge statistics"
+    edges="$(jq -c --arg id "$edge_id" --argjson stats "$response" '. + [{id:$id,stats:$stats}]' <<<"$edges")"
+  done < <(ordered_edges)
+  jq -n --argjson edges "$edges" '{version:1,edges:$edges}'
+}
+
 main() {
   [[ $# == 1 ]] || fail "usage: reality-helper ACTION"
   validate_config
@@ -160,6 +173,9 @@ main() {
       device_id="${credential#vless-reality:}"
       valid_device_id "$device_id" || fail "invalid device id"
       if [[ "$action" == revoke ]]; then revoke_device "$device_id"; else client_config "$device_id"; fi
+      ;;
+    stats)
+      traffic_stats
       ;;
     *) fail "unsupported action" ;;
   esac

@@ -65,7 +65,8 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn-edge ]]; then
   public_key="$(sed -n 's/^Password (PublicKey): //p' <<<"$key_output")"
   short_id="$(openssl rand -hex 8)"
   jq -n --arg private_key "$private_key" --arg short_id "$short_id" --arg sni "$edge_sni" '{
-    log:{loglevel:"warning"},api:{tag:"api",services:["HandlerService"]},
+    log:{loglevel:"warning"},api:{tag:"api",services:["HandlerService","StatsService"]},
+    policy:{levels:{"0":{statsUserUplink:true,statsUserDownlink:true}}},
     inbounds:[
       {tag:"my-vpn-reality",listen:"0.0.0.0",port:443,protocol:"vless",settings:{clients:[],decryption:"none"},streamSettings:{network:"raw",security:"reality",realitySettings:{show:false,dest:"127.0.0.1:8444",xver:0,serverNames:[$sni],privateKey:$private_key,shortIds:[$short_id]}}},
       {tag:"api-in",listen:"127.0.0.1",port:10085,protocol:"dokodemo-door",settings:{address:"127.0.0.1"}}
@@ -95,6 +96,17 @@ if [[ ! -f "$reset_marker" ]]; then
   mv -f "$reset_candidate" /etc/xray/config.json
   install -m 0600 -o root -g root /dev/null "$reset_marker"
 fi
+# Enable per-device byte counters for private Telegram statistics. The API is
+# loopback-only and records no domains, URLs or DNS requests.
+stats_candidate="$(mktemp --suffix=.json /etc/xray/.stats-config.XXXXXX)"
+jq '
+  .api = {tag:"api",services:["HandlerService","StatsService"]} |
+  .policy = ((.policy // {}) * {levels: (((.policy // {}).levels // {}) * {"0": {statsUserUplink:true,statsUserDownlink:true}})})
+' /etc/xray/config.json > "$stats_candidate"
+chown xray:xray "$stats_candidate"
+chmod 0640 "$stats_candidate"
+xray run -test -config "$stats_candidate" >/dev/null
+mv -f "$stats_candidate" /etc/xray/config.json
 # Keep public egress on IPv4. This avoids clients receiving an IPv6 route that
 # the edge or the mobile network cannot carry consistently.
 ipv4_candidate="$(mktemp --suffix=.json /etc/xray/.ipv4-config.XXXXXX)"

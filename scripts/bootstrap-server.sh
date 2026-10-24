@@ -213,7 +213,8 @@ if [[ ! -f /etc/xray/.managed-by-my-vpn ]]; then
   [[ "$short_id" =~ ^[0-9a-f]{16}$ ]]
   jq -n --arg private_key "$private_key" --arg short_id "$short_id" '{
     log: {loglevel: "warning"},
-    api: {tag: "api", services: ["HandlerService"]},
+    api: {tag: "api", services: ["HandlerService", "StatsService"]},
+    policy: {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}},
     inbounds: [{
       tag: "my-vpn-reality",
       listen: "0.0.0.0",
@@ -306,17 +307,22 @@ cp /etc/my-vpn/xray-client.env /etc/my-vpn/edge.env
 chown root:root /etc/my-vpn/edge.env
 chmod 0600 /etc/my-vpn/edge.env
 
-# Add the loopback-only HandlerService API to installations created before the
-# no-restart provisioning path. Public traffic never reaches this listener.
+# Add the loopback-only management and statistics APIs to older installations.
+# Public traffic never reaches this listener.
 if ! jq -e '
   .api.tag == "api" and
+  ((.api.services // []) | index("HandlerService")) and
+  ((.api.services // []) | index("StatsService")) and
+  .policy.levels["0"].statsUserUplink == true and
+  .policy.levels["0"].statsUserDownlink == true and
   ([.inbounds[] | select(.tag == "api-in" and .listen == "127.0.0.1" and .port == 10085)] | length) == 1 and
   ([.outbounds[] | select(.tag == "api")] | length) == 0 and
   ([.routing.rules[] | select(.outboundTag == "api" and ((.inboundTag // []) | index("api-in")))] | length) == 1
 ' /etc/xray/config.json >/dev/null; then
   cp -a /etc/xray/config.json "/etc/xray/config.json.pre-runtime-api.$(date -u +%Y%m%dT%H%M%SZ)"
   jq '
-    .api = {tag: "api", services: ["HandlerService"]} |
+    .api = {tag: "api", services: ["HandlerService", "StatsService"]} |
+    .policy = ((.policy // {}) * {levels: (((.policy // {}).levels // {}) * {"0": {statsUserUplink: true, statsUserDownlink: true}})}) |
     .inbounds = ([.inbounds[] | select(.tag != "api-in")] + [{
       tag: "api-in", listen: "127.0.0.1", port: 10085,
       protocol: "dokodemo-door", settings: {address: "127.0.0.1"}

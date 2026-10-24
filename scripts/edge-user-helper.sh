@@ -126,5 +126,15 @@ case "$action" in
       --arg sni "$(sed -n 's/^XRAY_SNI=//p' /etc/my-vpn/edge.env)" \
       '{server:$server,port:($port|tonumber),public_key:$public_key,short_id:$short_id,sni:$sni,flow:"xtls-rprx-vision"}'
     ;;
+  stats)
+    [[ $# -eq 1 ]] || exit 2
+    output="$(xray api statsquery --server="$api_server" --timeout=5 -pattern 'user>>>device-')"
+    jq -ce '[
+      (.stat // [])[] |
+      select(.name | test("^user>>>device-[0-9a-f]{32}>>>traffic>>>(uplink|downlink)$")) |
+      {name: .name, value: (.value | tonumber)} |
+      select(.value >= 0)
+    ]' <<<"$output"
+    ;;
   *) exit 2 ;;
 esac
