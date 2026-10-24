@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ const (
 
 var deviceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var trafficNamePattern = regexp.MustCompile(`^user>>>device-([0-9a-f]{32})>>>traffic>>>(uplink|downlink)$`)
 
 // Reality provisions one VLESS Reality UUID per device through a fixed,
 // root-owned helper. The my-vpn service must only receive sudo permission for
@@ -54,6 +56,7 @@ type ConfigProvider interface {
 
 var _ Provisioner = (*Reality)(nil)
 var _ ConfigProvider = (*Reality)(nil)
+var _ TrafficProvider = (*Reality)(nil)
 
 type helperRunner interface {
 	Run(context.Context, string, []byte) ([]byte, error)
@@ -84,6 +87,17 @@ type revokeResponse struct {
 type configResponse struct {
 	Version   int      `json:"version"`
 	VLESSURIs []string `json:"vless_uris"`
+}
+
+type statsResponse struct {
+	Version int `json:"version"`
+	Edges   []struct {
+		ID    string `json:"id"`
+		Stats []struct {
+			Name  string `json:"name"`
+			Value int64  `json:"value"`
+		} `json:"stats"`
+	} `json:"edges"`
 }
 
 func NewReality() *Reality {
@@ -169,6 +183,67 @@ func (r *Reality) ClientConfig(ctx context.Context, credentialRef string) (Clien
 	return ClientConfig{VLESSURIs: append([]string(nil), response.VLESSURIs...)}, nil
 }
 
+func (r *Reality) TrafficSnapshot(ctx context.Context) ([]TrafficCounter, error) {
+	payload, err := json.Marshal(helperRequest{Version: helperProtocol})
+	if err != nil {
+		return nil, errors.New("encode Reality traffic request")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	output, err := r.runner.Run(callCtx, "stats", payload)
+	if err != nil {
+		return nil, errors.New("Reality helper could not read traffic counters")
+	}
+	var response statsResponse
+	if err := decodeHelperResponse(output, &response); err != nil || response.Version != helperProtocol || len(response.Edges) != 2 {
+		return nil, errors.New("Reality helper returned invalid traffic counters")
+	}
+	type counterKey struct{ edge, device string }
+	counters := make(map[counterKey]TrafficCounter)
+	directions := make(map[string]struct{})
+	edges := make(map[string]struct{})
+	for _, edge := range response.Edges {
+		if edge.ID != "lt" && edge.ID != "fi" {
+			return nil, errors.New("Reality helper returned invalid traffic edge")
+		}
+		if _, exists := edges[edge.ID]; exists {
+			return nil, errors.New("Reality helper returned duplicate traffic edge")
+		}
+		edges[edge.ID] = struct{}{}
+		for _, stat := range edge.Stats {
+			matches := trafficNamePattern.FindStringSubmatch(stat.Name)
+			if len(matches) != 3 || stat.Value < 0 {
+				return nil, errors.New("Reality helper returned invalid traffic counter")
+			}
+			directionKey := edge.ID + ":" + matches[1] + ":" + matches[2]
+			if _, exists := directions[directionKey]; exists {
+				return nil, errors.New("Reality helper returned duplicate traffic counter")
+			}
+			directions[directionKey] = struct{}{}
+			key := counterKey{edge: edge.ID, device: matches[1]}
+			counter := counters[key]
+			counter.DeviceID, counter.Edge = matches[1], edge.ID
+			if matches[2] == "uplink" {
+				counter.Uplink = stat.Value
+			} else {
+				counter.Downlink = stat.Value
+			}
+			counters[key] = counter
+		}
+	}
+	result := make([]TrafficCounter, 0, len(counters))
+	for _, counter := range counters {
+		result = append(result, counter)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].DeviceID == result[j].DeviceID {
+			return result[i].Edge < result[j].Edge
+		}
+		return result[i].DeviceID < result[j].DeviceID
+	})
+	return result, nil
+}
+
 func (r *Reality) bestEffortRevoke(parent context.Context, credentialRef string) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), r.callTimeout())
 	defer cancel()
@@ -183,7 +258,7 @@ func (r *Reality) callTimeout() time.Duration {
 }
 
 func (sudoHelperRunner) Run(ctx context.Context, action string, input []byte) ([]byte, error) {
-	if action != "provision" && action != "revoke" && action != "config" {
+	if action != "provision" && action != "revoke" && action != "config" && action != "stats" {
 		return nil, errors.New("unsupported Reality helper action")
 	}
 	if filepath.Clean(RealityHelperPath) != RealityHelperPath {

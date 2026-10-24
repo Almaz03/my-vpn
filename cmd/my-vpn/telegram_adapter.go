@@ -33,12 +33,33 @@ func (a telegramAdapter) ListDevices(ctx context.Context) ([]telegram.Device, er
 	}
 	result := make([]telegram.Device, 0, len(devices))
 	for _, device := range devices {
+		traffic, trafficErr := a.service.DeviceTraffic(ctx, device.ID)
+		if trafficErr != nil {
+			return nil, trafficErr
+		}
 		result = append(result, telegram.Device{
 			ID: device.ID, RelativeName: device.RelativeName, DeviceName: device.DeviceName,
 			Platform: device.Platform, State: device.State, Revoked: device.RevokedAt != nil,
+			CreatedAt: device.CreatedAt, LastSeenAt: traffic.LastSeenAt, LastEdge: traffic.LastEdge,
+			Bytes24Hours: traffic.Bytes24Hours, BytesMonth: traffic.BytesMonth,
 		})
 	}
 	return result, nil
+}
+
+func (a telegramAdapter) TrafficSummary(ctx context.Context) ([]telegram.EdgeTraffic, error) {
+	edges, err := a.service.EdgeTraffic(ctx)
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]store.EdgeTraffic{}
+	for _, edge := range edges {
+		values[edge.Edge] = edge
+	}
+	return []telegram.EdgeTraffic{
+		{Edge: "lt", Bytes24Hours: values["lt"].Bytes24Hours, BytesMonth: values["lt"].BytesMonth},
+		{Edge: "fi", Bytes24Hours: values["fi"].Bytes24Hours, BytesMonth: values["fi"].BytesMonth},
+	}, nil
 }
 
 func (a telegramAdapter) RevokeDevice(ctx context.Context, id string) error {

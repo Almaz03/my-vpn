@@ -52,6 +52,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if configuration.ProvisionerMode == "vless-reality" {
+		go collectTraffic(ctx, logger, application)
+	}
 	if configuration.TelegramBotToken != "" {
 		bot, err := telegram.New(telegram.Config{
 			Token: configuration.TelegramBotToken, Admins: configuration.TelegramAdmins,
@@ -83,5 +86,26 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server stopped unexpectedly", "error", err)
 		os.Exit(1)
+	}
+}
+
+func collectTraffic(ctx context.Context, logger *slog.Logger, application *service.Service) {
+	collect := func() {
+		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := application.CollectTraffic(callCtx); err != nil && ctx.Err() == nil {
+			logger.Warn("traffic counter collection failed", "error", err)
+		}
+	}
+	collect()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			collect()
+		}
 	}
 }

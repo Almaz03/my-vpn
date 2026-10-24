@@ -23,6 +23,7 @@ type fakeApplication struct {
 	devices        []Device
 	revokedID      string
 	status         SystemStatus
+	traffic        []EdgeTraffic
 	invitationCode string
 	err            error
 	approvedID     string
@@ -53,6 +54,10 @@ func (a *fakeApplication) RevokeDevice(_ context.Context, id string) error {
 
 func (a *fakeApplication) SystemStatus(context.Context) (SystemStatus, error) {
 	return a.status, a.err
+}
+
+func (a *fakeApplication) TrafficSummary(context.Context) ([]EdgeTraffic, error) {
+	return a.traffic, a.err
 }
 
 func (a *fakeApplication) ApproveAccessRequest(_ context.Context, id string) (Invitation, error) {
@@ -327,6 +332,28 @@ func TestStatusListsAllVPNProfileEdges(t *testing.T) {
 	text, _ := (*requests)[0].body["text"].(string)
 	if !strings.Contains(text, "Узлы профиля: 🇱🇹 Литва 🚀 · 🇫🇮 Финляндия 🚀") {
 		t.Fatalf("status=%q", text)
+	}
+}
+
+func TestTrafficButtonShowsBothEdges(t *testing.T) {
+	server, requests := telegramServer(t)
+	defer server.Close()
+	app := &fakeApplication{traffic: []EdgeTraffic{
+		{Edge: "lt", Bytes24Hours: 2 << 30, BytesMonth: 3 << 30},
+		{Edge: "fi", Bytes24Hours: 5 << 20, BytesMonth: 7 << 20},
+	}}
+	bot := newTestBot(t, server, app)
+	if err := bot.handleUpdate(context.Background(), apiUpdate{Message: &apiMessage{
+		From: &apiUser{ID: 42}, Chat: apiChat{ID: 42}, Text: "📈 Трафик",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*requests) != 1 {
+		t.Fatalf("requests=%#v", *requests)
+	}
+	text, _ := (*requests)[0].body["text"].(string)
+	if !strings.Contains(text, "🇱🇹 Литва") || !strings.Contains(text, "2.00 ГБ") || !strings.Contains(text, "🇫🇮 Финляндия") || !strings.Contains(text, "5.0 МБ") {
+		t.Fatalf("traffic=%q", text)
 	}
 }
 

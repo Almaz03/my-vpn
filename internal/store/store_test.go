@@ -111,6 +111,53 @@ func TestActivationBackoffStartsAtOneSecond(t *testing.T) {
 	}
 }
 
+func TestTrafficSnapshotTracksDeltaActivityAndEdges(t *testing.T) {
+	database := testStore(t)
+	now := time.Date(2026, 10, 24, 10, 15, 0, 0, time.UTC)
+	database.now = func() time.Time { return now }
+	hash := bytes.Repeat([]byte{42}, 32)
+	if _, err := database.CreateInvitation(context.Background(), hash, "Мама", "iPhone", now.Add(time.Hour), 5); err != nil {
+		t.Fatal(err)
+	}
+	device, err := database.ConsumeInvitation(context.Background(), hash, "ios", "", "ip-hmac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateProvisioned(context.Background(), device.ID, "vless-reality:"+device.ID, "active"); err != nil {
+		t.Fatal(err)
+	}
+	baseline := []TrafficCounter{
+		{DeviceID: device.ID, Edge: "lt", Uplink: 100, Downlink: 200},
+		{DeviceID: device.ID, Edge: "fi", Uplink: 300, Downlink: 400},
+	}
+	if err := database.RecordTrafficSnapshot(context.Background(), baseline); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := database.DeviceTraffic(context.Background(), device.ID)
+	if err != nil || initial.Bytes24Hours != 1_000 || initial.LastSeenAt != nil {
+		t.Fatalf("initial=%#v err=%v", initial, err)
+	}
+	now = now.Add(time.Minute)
+	current := []TrafficCounter{
+		{DeviceID: device.ID, Edge: "lt", Uplink: 200, Downlink: 300},
+		{DeviceID: device.ID, Edge: "fi", Uplink: 20_300, Downlink: 100_400},
+	}
+	if err := database.RecordTrafficSnapshot(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	traffic, err := database.DeviceTraffic(context.Background(), device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traffic.Bytes24Hours != 121_200 || traffic.BytesMonth != 121_200 || traffic.LastSeenAt == nil || traffic.LastEdge != "fi" {
+		t.Fatalf("traffic=%#v", traffic)
+	}
+	edges, err := database.EdgeTraffic(context.Background())
+	if err != nil || len(edges) != 2 || edges[0].Edge != "fi" || edges[0].Bytes24Hours != 120_700 || edges[1].Edge != "lt" || edges[1].Bytes24Hours != 500 {
+		t.Fatalf("edges=%#v err=%v", edges, err)
+	}
+}
+
 func TestAccessRequestLimitAllowsSharedHouseholdIP(t *testing.T) {
 	database := testStore(t)
 	now := time.Unix(1_700_000_000, 0).UTC()

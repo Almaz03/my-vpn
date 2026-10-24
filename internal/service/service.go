@@ -402,6 +402,33 @@ func (s *Service) ExtendInvitation(ctx context.Context, id string, ttl time.Dura
 
 func (s *Service) Stats(ctx context.Context) (store.Stats, error) { return s.store.Stats(ctx) }
 
+func (s *Service) CollectTraffic(ctx context.Context) error {
+	provider, ok := s.provisioner.(provision.TrafficProvider)
+	if !ok {
+		return nil
+	}
+	snapshot, err := provider.TrafficSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	counters := make([]store.TrafficCounter, 0, len(snapshot))
+	for _, counter := range snapshot {
+		counters = append(counters, store.TrafficCounter{
+			DeviceID: counter.DeviceID, Edge: counter.Edge,
+			Uplink: counter.Uplink, Downlink: counter.Downlink,
+		})
+	}
+	return s.store.RecordTrafficSnapshot(ctx, counters)
+}
+
+func (s *Service) DeviceTraffic(ctx context.Context, deviceID string) (store.DeviceTraffic, error) {
+	return s.store.DeviceTraffic(ctx, deviceID)
+}
+
+func (s *Service) EdgeTraffic(ctx context.Context) ([]store.EdgeTraffic, error) {
+	return s.store.EdgeTraffic(ctx)
+}
+
 func (s *Service) RevokeInvitation(ctx context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return store.ErrInvalidInvitation

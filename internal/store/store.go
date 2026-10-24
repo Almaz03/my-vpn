@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ const (
 	accessRequestsPerIPPerHour  = 20
 	accessRequestsGlobalPerHour = 200
 )
+
+var storedDeviceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 type Store struct {
 	db  *sql.DB
@@ -89,6 +92,26 @@ type Stats struct {
 	DevicesActive   int `json:"devices_active"`
 	DevicesPending  int `json:"devices_pending"`
 	DevicesRevoked  int `json:"devices_revoked"`
+}
+
+type TrafficCounter struct {
+	DeviceID string
+	Edge     string
+	Uplink   int64
+	Downlink int64
+}
+
+type DeviceTraffic struct {
+	Bytes24Hours int64
+	BytesMonth   int64
+	LastSeenAt   *time.Time
+	LastEdge     string
+}
+
+type EdgeTraffic struct {
+	Edge         string
+	Bytes24Hours int64
+	BytesMonth   int64
 }
 
 func Open(path string) (*Store, error) {
@@ -760,6 +783,155 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		}
 	}
 	return stats, rows.Err()
+}
+
+func (s *Store) RecordTrafficSnapshot(ctx context.Context, counters []TrafficCounter) error {
+	now := s.now().UTC().Truncate(time.Second)
+	bucket := now.Unix() / 3600 * 3600
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	type activityDelta struct {
+		total    int64
+		maxBytes int64
+		edge     string
+	}
+	activity := make(map[string]activityDelta)
+	seen := make(map[string]struct{}, len(counters))
+	for _, counter := range counters {
+		if !storedDeviceIDPattern.MatchString(counter.DeviceID) || (counter.Edge != "lt" && counter.Edge != "fi") || counter.Uplink < 0 || counter.Downlink < 0 {
+			return errors.New("invalid traffic counter")
+		}
+		key := counter.DeviceID + ":" + counter.Edge
+		if _, duplicate := seen[key]; duplicate {
+			return errors.New("duplicate traffic counter")
+		}
+		seen[key] = struct{}{}
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM devices WHERE id = ?`, counter.DeviceID).Scan(&state); errors.Is(err, sql.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("find traffic device: %w", err)
+		} else if state != "active" {
+			continue
+		}
+		var previousUp, previousDown int64
+		baselineExists := true
+		if err := tx.QueryRowContext(ctx, `SELECT uplink, downlink FROM traffic_counters WHERE device_id = ? AND edge = ?`, counter.DeviceID, counter.Edge).Scan(&previousUp, &previousDown); errors.Is(err, sql.ErrNoRows) {
+			baselineExists = false
+		} else if err != nil {
+			return fmt.Errorf("read traffic baseline: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO traffic_counters(device_id, edge, uplink, downlink, observed_at)
+			VALUES(?, ?, ?, ?, ?)
+			ON CONFLICT(device_id, edge) DO UPDATE SET uplink=excluded.uplink, downlink=excluded.downlink, observed_at=excluded.observed_at`,
+			counter.DeviceID, counter.Edge, counter.Uplink, counter.Downlink, now.Unix()); err != nil {
+			return fmt.Errorf("write traffic baseline: %w", err)
+		}
+		deltaUp, deltaDown := counter.Uplink, counter.Downlink
+		if baselineExists {
+			deltaUp, deltaDown = counter.Uplink-previousUp, counter.Downlink-previousDown
+		}
+		if deltaUp < 0 {
+			deltaUp = counter.Uplink
+		}
+		if deltaDown < 0 {
+			deltaDown = counter.Downlink
+		}
+		if deltaUp == 0 && deltaDown == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO traffic_hourly(device_id, edge, bucket_start, uplink, downlink)
+			VALUES(?, ?, ?, ?, ?)
+			ON CONFLICT(device_id, edge, bucket_start) DO UPDATE SET
+				uplink=traffic_hourly.uplink+excluded.uplink,
+				downlink=traffic_hourly.downlink+excluded.downlink`,
+			counter.DeviceID, counter.Edge, bucket, deltaUp, deltaDown); err != nil {
+			return fmt.Errorf("aggregate traffic: %w", err)
+		}
+		delta := deltaUp + deltaDown
+		current := activity[counter.DeviceID]
+		current.total += delta
+		if delta > current.maxBytes {
+			current.maxBytes, current.edge = delta, counter.Edge
+		}
+		activity[counter.DeviceID] = current
+	}
+	for deviceID, current := range activity {
+		// Clash Mi probes both edges for automatic failover. Ignore that small
+		// background traffic when calculating human-readable activity.
+		if current.total < 64<<10 || current.edge == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO device_activity(device_id, last_seen_at, last_edge)
+			VALUES(?, ?, ?)
+			ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at, last_edge=excluded.last_edge`,
+			deviceID, now.Unix(), current.edge); err != nil {
+			return fmt.Errorf("update device activity: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM traffic_hourly WHERE bucket_start < ?`, now.Add(-62*24*time.Hour).Unix()); err != nil {
+		return fmt.Errorf("prune traffic history: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeviceTraffic(ctx context.Context, deviceID string) (DeviceTraffic, error) {
+	if !storedDeviceIDPattern.MatchString(deviceID) {
+		return DeviceTraffic{}, errors.New("invalid device id")
+	}
+	now := s.now().UTC()
+	cutoff24, month := trafficCutoffs(now)
+	var result DeviceTraffic
+	if err := s.db.QueryRowContext(ctx, `SELECT
+		COALESCE(SUM(CASE WHEN bucket_start >= ? THEN uplink + downlink ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN bucket_start >= ? THEN uplink + downlink ELSE 0 END), 0)
+		FROM traffic_hourly WHERE device_id = ?`, cutoff24, month, deviceID).Scan(&result.Bytes24Hours, &result.BytesMonth); err != nil {
+		return DeviceTraffic{}, fmt.Errorf("read device traffic: %w", err)
+	}
+	var lastSeen sql.NullInt64
+	var lastEdge sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT last_seen_at, last_edge FROM device_activity WHERE device_id = ?`, deviceID).Scan(&lastSeen, &lastEdge); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return DeviceTraffic{}, fmt.Errorf("read device activity: %w", err)
+	}
+	if lastSeen.Valid {
+		value := time.Unix(lastSeen.Int64, 0).UTC()
+		result.LastSeenAt = &value
+		result.LastEdge = lastEdge.String
+	}
+	return result, nil
+}
+
+func (s *Store) EdgeTraffic(ctx context.Context) ([]EdgeTraffic, error) {
+	now := s.now().UTC()
+	cutoff24, month := trafficCutoffs(now)
+	rows, err := s.db.QueryContext(ctx, `SELECT h.edge,
+		COALESCE(SUM(CASE WHEN h.bucket_start >= ? THEN h.uplink + h.downlink ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN h.bucket_start >= ? THEN h.uplink + h.downlink ELSE 0 END), 0)
+		FROM traffic_hourly h JOIN devices d ON d.id = h.device_id
+		WHERE d.state = 'active' GROUP BY h.edge ORDER BY h.edge`, cutoff24, month)
+	if err != nil {
+		return nil, fmt.Errorf("read edge traffic: %w", err)
+	}
+	defer rows.Close()
+	result := make([]EdgeTraffic, 0, 2)
+	for rows.Next() {
+		var edge EdgeTraffic
+		if err := rows.Scan(&edge.Edge, &edge.Bytes24Hours, &edge.BytesMonth); err != nil {
+			return nil, fmt.Errorf("scan edge traffic: %w", err)
+		}
+		result = append(result, edge)
+	}
+	return result, rows.Err()
+}
+
+func trafficCutoffs(now time.Time) (int64, int64) {
+	moscow := time.FixedZone("MSK", 3*60*60)
+	local := now.In(moscow)
+	monthStart := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, moscow)
+	return now.Add(-24 * time.Hour).Unix(), monthStart.UTC().Unix()
 }
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {

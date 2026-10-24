@@ -15,6 +15,8 @@ const (
 	maxTelegramText  = 4000
 )
 
+var moscowTime = time.FixedZone("МСК", 3*60*60)
+
 type inviteStage uint8
 
 const (
@@ -35,6 +37,7 @@ type Application interface {
 	ListDevices(ctx context.Context) ([]Device, error)
 	RevokeDevice(ctx context.Context, id string) error
 	SystemStatus(ctx context.Context) (SystemStatus, error)
+	TrafficSummary(ctx context.Context) ([]EdgeTraffic, error)
 	ApproveAccessRequest(ctx context.Context, id string) (Invitation, error)
 	DenyAccessRequest(ctx context.Context, id string) error
 }
@@ -51,6 +54,17 @@ type Device struct {
 	Platform     string
 	State        string
 	Revoked      bool
+	CreatedAt    time.Time
+	LastSeenAt   *time.Time
+	LastEdge     string
+	Bytes24Hours int64
+	BytesMonth   int64
+}
+
+type EdgeTraffic struct {
+	Edge         string
+	Bytes24Hours int64
+	BytesMonth   int64
 }
 
 type SystemStatus struct {
@@ -215,6 +229,8 @@ func (b *Bot) handleUpdate(ctx context.Context, update apiUpdate) error {
 		return b.revokeDevice(ctx, message.Chat.ID, strings.TrimSpace(argument), "")
 	case "/status":
 		return b.status(ctx, message.Chat.ID)
+	case "/traffic":
+		return b.traffic(ctx, message.Chat.ID)
 	default:
 		return b.api.sendMessage(ctx, message.Chat.ID, helpText(), nil)
 	}
@@ -336,8 +352,15 @@ func (b *Bot) listDevices(ctx context.Context, chatID int64, revokedOnly bool) e
 		if device.Revoked {
 			state = "revoked"
 		}
-		text := fmt.Sprintf("%s — %s\nПлатформа: %s\nСостояние: %s\nID: %s",
-			safeField(device.RelativeName), safeField(device.DeviceName), safeField(device.Platform), state, safeField(device.ID))
+		activity := "ещё не зафиксирована"
+		if device.LastSeenAt != nil {
+			activity = device.LastSeenAt.In(moscowTime).Format("02.01.2006 15:04") + " МСК"
+		}
+		edge := edgeLabel(device.LastEdge)
+		text := fmt.Sprintf("%s — %s\nПлатформа: %s\nСостояние: %s\nДобавлено: %s МСК\nПоследняя активность: %s\nПоследний узел: %s\nТрафик за 24 ч: %s\nТрафик за месяц: %s\nID: %s",
+			safeField(device.RelativeName), safeField(device.DeviceName), safeField(device.Platform), state,
+			device.CreatedAt.In(moscowTime).Format("02.01.2006 15:04"), activity, edge,
+			formatBytes(device.Bytes24Hours), formatBytes(device.BytesMonth), safeField(device.ID))
 		var keyboard *inlineKeyboard
 		if !device.Revoked && validateDeviceID(device.ID) == nil {
 			keyboard = &inlineKeyboard{InlineKeyboard: [][]inlineButton{{{
@@ -349,6 +372,51 @@ func (b *Bot) listDevices(ctx context.Context, chatID int64, revokedOnly bool) e
 		}
 	}
 	return nil
+}
+
+func (b *Bot) traffic(ctx context.Context, chatID int64) error {
+	edges, err := b.app.TrafficSummary(ctx)
+	if err != nil {
+		return b.api.sendMessage(ctx, chatID, "Не удалось получить статистику трафика.", nil)
+	}
+	lines := []string{"Трафик VPN (без истории сайтов):"}
+	for _, edge := range edges {
+		lines = append(lines, fmt.Sprintf("%s\nЗа 24 ч: %s\nЗа месяц: %s",
+			edgeLabel(edge.Edge), formatBytes(edge.Bytes24Hours), formatBytes(edge.BytesMonth)))
+	}
+	return b.api.sendMessage(ctx, chatID, strings.Join(lines, "\n\n"), nil)
+}
+
+func edgeLabel(edge string) string {
+	switch edge {
+	case "lt":
+		return "🇱🇹 Литва 🚀"
+	case "fi":
+		return "🇫🇮 Финляндия 🚀"
+	default:
+		return "нет данных"
+	}
+}
+
+func formatBytes(value int64) string {
+	if value < 0 {
+		value = 0
+	}
+	const (
+		kiB = 1 << 10
+		miB = 1 << 20
+		giB = 1 << 30
+	)
+	switch {
+	case value >= giB:
+		return fmt.Sprintf("%.2f ГБ", float64(value)/giB)
+	case value >= miB:
+		return fmt.Sprintf("%.1f МБ", float64(value)/miB)
+	case value >= kiB:
+		return fmt.Sprintf("%.1f КБ", float64(value)/kiB)
+	default:
+		return fmt.Sprintf("%d Б", value)
+	}
 }
 
 func (b *Bot) revokeDevice(ctx context.Context, chatID int64, id, callbackID string) error {
@@ -394,6 +462,8 @@ func splitCommand(text string) (string, string) {
 		return "/invite", ""
 	case "📊 Статус":
 		return "/status", ""
+	case "📈 Трафик":
+		return "/traffic", ""
 	}
 	if text == "" {
 		return "", ""
@@ -405,7 +475,7 @@ func splitCommand(text string) (string, string) {
 }
 
 func helpText() string {
-	return "Выбери действие кнопкой ниже.\n\nКоманды также доступны:\n/invite — код на 5 минут\n/invite 15 — другой срок\n/cancel — отменить ввод\n/devices\n/revoked\n/revoke ID\n/status"
+	return "Выбери действие кнопкой ниже.\n\nКоманды также доступны:\n/invite — код на 5 минут\n/invite 15 — другой срок\n/cancel — отменить ввод\n/devices\n/revoked\n/revoke ID\n/status\n/traffic"
 }
 
 func mainMenu() *replyKeyboard {
@@ -413,6 +483,7 @@ func mainMenu() *replyKeyboard {
 		Keyboard: [][]replyButton{
 			{{Text: "📱 Активные"}, {Text: "🗑 Отозванные"}},
 			{{Text: "➕ Приглашение"}, {Text: "📊 Статус"}},
+			{{Text: "📈 Трафик"}},
 		},
 		ResizeKeyboard: true, IsPersistent: true,
 		InputPlaceholder: "Выберите действие",
@@ -466,7 +537,7 @@ func (b *Bot) continueInvitation(ctx context.Context, chatID int64, text string)
 
 func isMenuButton(text string) bool {
 	switch strings.TrimSpace(text) {
-	case "📱 Активные", "🗑 Отозванные", "➕ Приглашение", "📊 Статус":
+	case "📱 Активные", "🗑 Отозванные", "➕ Приглашение", "📊 Статус", "📈 Трафик":
 		return true
 	default:
 		return false

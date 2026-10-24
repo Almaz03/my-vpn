@@ -22,6 +22,8 @@ type fakeHelper struct {
 	revokeErr    error
 	config       []byte
 	configErr    error
+	stats        []byte
+	statsErr     error
 }
 
 func (f *fakeHelper) Run(_ context.Context, action string, input []byte) ([]byte, error) {
@@ -32,7 +34,30 @@ func (f *fakeHelper) Run(_ context.Context, action string, input []byte) ([]byte
 	if action == "config" {
 		return f.config, f.configErr
 	}
+	if action == "stats" {
+		return f.stats, f.statsErr
+	}
 	return f.revoke, f.revokeErr
+}
+
+func TestRealityTrafficSnapshot(t *testing.T) {
+	helper := &fakeHelper{stats: []byte(`{"version":1,"edges":[{"id":"lt","stats":[{"name":"user>>>device-0123456789abcdef0123456789abcdef>>>traffic>>>uplink","value":123},{"name":"user>>>device-0123456789abcdef0123456789abcdef>>>traffic>>>downlink","value":456}]},{"id":"fi","stats":[]}]}`)}
+	provider := &Reality{runner: helper, timeout: time.Second}
+	counters, err := provider.TrafficSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(counters) != 1 || counters[0].DeviceID != "0123456789abcdef0123456789abcdef" || counters[0].Edge != "lt" || counters[0].Uplink != 123 || counters[0].Downlink != 456 {
+		t.Fatalf("counters=%#v", counters)
+	}
+}
+
+func TestRealityTrafficSnapshotRejectsDestinationData(t *testing.T) {
+	helper := &fakeHelper{stats: []byte(`{"version":1,"edges":[{"id":"lt","stats":[{"name":"domain>>>example.com","value":1}]},{"id":"fi","stats":[]}]}`)}
+	provider := &Reality{runner: helper, timeout: time.Second}
+	if _, err := provider.TrafficSnapshot(context.Background()); err == nil {
+		t.Fatal("destination-bearing statistic was accepted")
+	}
 }
 
 func validDeviceRequest() DeviceRequest {

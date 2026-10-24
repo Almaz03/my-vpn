@@ -96,3 +96,31 @@ CREATE TABLE IF NOT EXISTS access_requests (
 );
 CREATE INDEX IF NOT EXISTS access_requests_expires_idx ON access_requests(expires_at);
 CREATE INDEX IF NOT EXISTS access_requests_ip_time_idx ON access_requests(remote_ip_hmac, created_at);
+
+-- Xray exposes cumulative byte counters keyed by the opaque device id. These
+-- tables retain only aggregate bytes and activity timestamps; destinations,
+-- domains and client IP addresses are never collected.
+CREATE TABLE IF NOT EXISTS traffic_counters (
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    edge TEXT NOT NULL CHECK (edge IN ('lt', 'fi')),
+    uplink INTEGER NOT NULL CHECK (uplink >= 0),
+    downlink INTEGER NOT NULL CHECK (downlink >= 0),
+    observed_at INTEGER NOT NULL,
+    PRIMARY KEY (device_id, edge)
+);
+
+CREATE TABLE IF NOT EXISTS traffic_hourly (
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    edge TEXT NOT NULL CHECK (edge IN ('lt', 'fi')),
+    bucket_start INTEGER NOT NULL,
+    uplink INTEGER NOT NULL CHECK (uplink >= 0),
+    downlink INTEGER NOT NULL CHECK (downlink >= 0),
+    PRIMARY KEY (device_id, edge, bucket_start)
+);
+CREATE INDEX IF NOT EXISTS traffic_hourly_bucket_idx ON traffic_hourly(bucket_start);
+
+CREATE TABLE IF NOT EXISTS device_activity (
+    device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    last_seen_at INTEGER NOT NULL,
+    last_edge TEXT NOT NULL CHECK (last_edge IN ('lt', 'fi'))
+);

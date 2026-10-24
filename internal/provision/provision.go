@@ -24,6 +24,19 @@ type Provisioner interface {
 	Revoke(context.Context, string) error
 }
 
+type TrafficCounter struct {
+	DeviceID string
+	Edge     string
+	Uplink   int64
+	Downlink int64
+}
+
+// TrafficProvider exposes byte counters only. It deliberately contains no
+// destinations, domains, IP addresses or connection logs.
+type TrafficProvider interface {
+	TrafficSnapshot(context.Context) ([]TrafficCounter, error)
+}
+
 // Noop deliberately never invokes Docker, WireGuard or Amnezia. It records a
 // unique opaque reference so the control-plane can be exercised safely before a
 // production adapter is explicitly implemented and reviewed.
